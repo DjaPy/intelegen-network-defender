@@ -31,3 +31,9 @@ redis = { version = "1.0.3", features = ["aio", "tokio-comp"], optional = true }
 # Logging
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+
+# Configuration
+dotenvy = "0.15"
+
+[dev-dependencies]
+temp-env = "0.3"

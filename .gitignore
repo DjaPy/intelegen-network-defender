@@ -1,1 +1,6 @@
 /target
+Cargo.lock
+
+# Environment variables
+.env
+.env.local
