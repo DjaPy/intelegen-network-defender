@@ -15,6 +15,7 @@ pub struct Config {
     pub proxy: ProxyConfig,
     pub rate_limit: RateLimitConfig,
     pub fingerprint: FingerprintConfig,
+    pub slowloris: SlowlorisConfig,
 }
 
 /// Server binding configuration
@@ -62,6 +63,19 @@ pub struct FingerprintConfig {
     pub require_common_headers: bool,
 }
 
+/// Slowloris protection settings
+#[derive(Debug, Clone)]
+pub struct SlowlorisConfig {
+    pub enabled: bool,
+    pub header_timeout_secs: u64,
+    pub request_timeout_secs: u64,
+    pub max_connections_per_ip: u32,
+    pub connection_rate_per_sec: u32,
+    pub idle_timeout_secs: u64,
+    pub storage: StorageType,
+    pub redis_url: Option<String>,
+}
+
 impl Config {
     /// Load configuration from environment variables
     ///
@@ -75,6 +89,7 @@ impl Config {
             proxy: ProxyConfig::from_env()?,
             rate_limit: RateLimitConfig::from_env()?,
             fingerprint: FingerprintConfig::from_env()?,
+            slowloris: SlowlorisConfig::from_env()?,
         })
     }
 }
@@ -241,6 +256,83 @@ impl FingerprintConfig {
             user_agent_blacklist,
             strict_header_order,
             require_common_headers,
+        })
+    }
+}
+
+impl SlowlorisConfig {
+    fn from_env() -> Result<Self> {
+        let enabled = env::var("SLOWLORIS_ENABLED")
+            .unwrap_or_else(|_| "true".to_string())
+            .parse::<bool>()
+            .map_err(|e| ArmorError::Config(format!("Invalid SLOWLORIS_ENABLED: {}", e)))?;
+
+        let header_timeout_secs = env::var("SLOWLORIS_HEADER_TIMEOUT_SECS")
+            .unwrap_or_else(|_| "10".to_string())
+            .parse::<u64>()
+            .map_err(|e| {
+                ArmorError::Config(format!("Invalid SLOWLORIS_HEADER_TIMEOUT_SECS: {}", e))
+            })?;
+
+        let request_timeout_secs = env::var("SLOWLORIS_REQUEST_TIMEOUT_SECS")
+            .unwrap_or_else(|_| "60".to_string())
+            .parse::<u64>()
+            .map_err(|e| {
+                ArmorError::Config(format!("Invalid SLOWLORIS_REQUEST_TIMEOUT_SECS: {}", e))
+            })?;
+
+        let max_connections_per_ip = env::var("SLOWLORIS_MAX_CONNECTIONS_PER_IP")
+            .unwrap_or_else(|_| "10".to_string())
+            .parse::<u32>()
+            .map_err(|e| {
+                ArmorError::Config(format!("Invalid SLOWLORIS_MAX_CONNECTIONS_PER_IP: {}", e))
+            })?;
+
+        let connection_rate_per_sec = env::var("SLOWLORIS_CONNECTION_RATE_PER_SEC")
+            .unwrap_or_else(|_| "5".to_string())
+            .parse::<u32>()
+            .map_err(|e| {
+                ArmorError::Config(format!("Invalid SLOWLORIS_CONNECTION_RATE_PER_SEC: {}", e))
+            })?;
+
+        let idle_timeout_secs = env::var("SLOWLORIS_IDLE_TIMEOUT_SECS")
+            .unwrap_or_else(|_| "30".to_string())
+            .parse::<u64>()
+            .map_err(|e| {
+                ArmorError::Config(format!("Invalid SLOWLORIS_IDLE_TIMEOUT_SECS: {}", e))
+            })?;
+
+        let storage_str = env::var("SLOWLORIS_STORAGE").unwrap_or_else(|_| "memory".to_string());
+
+        let storage = match storage_str.to_lowercase().as_str() {
+            "memory" => StorageType::Memory,
+            #[cfg(feature = "redis-storage")]
+            "redis" => StorageType::Redis,
+            _ => {
+                return Err(ArmorError::Config(format!(
+                    "Invalid SLOWLORIS_STORAGE: {}. Expected 'memory' or 'redis'",
+                    storage_str
+                )));
+            }
+        };
+
+        let redis_url = if storage == StorageType::Memory {
+            None
+        } else {
+            Some(env::var("REDIS_URL").map_err(|_| {
+                ArmorError::Config("REDIS_URL is required when using Redis storage".to_string())
+            })?)
+        };
+
+        Ok(Self {
+            enabled,
+            header_timeout_secs,
+            request_timeout_secs,
+            max_connections_per_ip,
+            connection_rate_per_sec,
+            idle_timeout_secs,
+            storage,
+            redis_url,
         })
     }
 }
@@ -443,6 +535,58 @@ mod tests {
                         .contains(&"googlebot".to_string())
                 );
                 assert!(config.user_agent_whitelist.contains(&"bingbot".to_string()));
+            },
+        );
+    }
+
+    #[test]
+    fn test_slowloris_defaults() {
+        temp_env::with_vars_unset(
+            vec![
+                "SLOWLORIS_ENABLED",
+                "SLOWLORIS_HEADER_TIMEOUT_SECS",
+                "SLOWLORIS_REQUEST_TIMEOUT_SECS",
+                "SLOWLORIS_MAX_CONNECTIONS_PER_IP",
+                "SLOWLORIS_CONNECTION_RATE_PER_SEC",
+                "SLOWLORIS_IDLE_TIMEOUT_SECS",
+                "SLOWLORIS_STORAGE",
+            ],
+            || {
+                let config = SlowlorisConfig::from_env().unwrap();
+                assert!(config.enabled);
+                assert_eq!(config.header_timeout_secs, 10);
+                assert_eq!(config.request_timeout_secs, 60);
+                assert_eq!(config.max_connections_per_ip, 10);
+                assert_eq!(config.connection_rate_per_sec, 5);
+                assert_eq!(config.idle_timeout_secs, 30);
+                assert_eq!(config.storage, StorageType::Memory);
+                assert!(config.redis_url.is_none());
+            },
+        );
+    }
+
+    #[test]
+    fn test_slowloris_custom() {
+        temp_env::with_vars(
+            vec![
+                ("SLOWLORIS_ENABLED", Some("false")),
+                ("SLOWLORIS_HEADER_TIMEOUT_SECS", Some("5")),
+                ("SLOWLORIS_REQUEST_TIMEOUT_SECS", Some("30")),
+                ("SLOWLORIS_MAX_CONNECTIONS_PER_IP", Some("20")),
+                ("SLOWLORIS_CONNECTION_RATE_PER_SEC", Some("10")),
+                ("SLOWLORIS_IDLE_TIMEOUT_SECS", Some("15")),
+                ("SLOWLORIS_STORAGE", Some("memory")),
+            ],
+            || {
+                let config = SlowlorisConfig::from_env().unwrap();
+                assert!(!config.enabled);
+                assert_eq!(config.header_timeout_secs, 5);
+                assert_eq!(config.request_timeout_secs, 30);
+                assert_eq!(config.max_connections_per_ip, 20);
+                assert_eq!(config.connection_rate_per_sec, 10);
+                assert_eq!(config.idle_timeout_secs, 15);
+                assert_eq!(config.storage, StorageType::Memory);
+                assert!(config.redis_url.is_none());
             },
         );
     }
