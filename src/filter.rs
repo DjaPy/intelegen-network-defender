@@ -4,8 +4,10 @@
 //! Filters can Allow, Deny, or Challenge requests based on inspection.
 
 pub mod rate_limit;
+pub mod fingerprint;
 
 pub use rate_limit::{RateLimitFilter, RateLimitConfig};
+pub use fingerprint::{FingerprintFilter, FingerprintConfig};
 
 use std::fmt;
 use std::net::SocketAddr;

@@ -14,6 +14,7 @@ pub struct Config {
     pub server: ServerConfig,
     pub proxy: ProxyConfig,
     pub rate_limit: RateLimitConfig,
+    pub fingerprint: FingerprintConfig,
 }
 
 /// Server binding configuration
@@ -49,6 +50,18 @@ pub enum StorageType {
     Redis,
 }
 
+/// Fingerprinting filter settings
+#[derive(Debug, Clone)]
+pub struct FingerprintConfig {
+    pub enabled: bool,
+    pub deny_threshold: u32,
+    pub challenge_threshold: u32,
+    pub user_agent_whitelist: Vec<String>,
+    pub user_agent_blacklist: Vec<String>,
+    pub strict_header_order: bool,
+    pub require_common_headers: bool,
+}
+
 impl Config {
     /// Load configuration from environment variables
     ///
@@ -61,6 +74,7 @@ impl Config {
             server: ServerConfig::from_env()?,
             proxy: ProxyConfig::from_env()?,
             rate_limit: RateLimitConfig::from_env()?,
+            fingerprint: FingerprintConfig::from_env()?,
         })
     }
 }
@@ -150,6 +164,86 @@ impl RateLimitConfig {
     }
 }
 
+impl FingerprintConfig {
+    fn from_env() -> Result<Self> {
+        let enabled = env::var("FINGERPRINT_ENABLED")
+            .unwrap_or_else(|_| "true".to_string())
+            .parse::<bool>()
+            .map_err(|e| ArmorError::Config(format!("Invalid FINGERPRINT_ENABLED: {}", e)))?;
+
+        let deny_threshold = env::var("FINGERPRINT_DENY_THRESHOLD")
+            .unwrap_or_else(|_| "85".to_string())
+            .parse::<u32>()
+            .map_err(|e| {
+                ArmorError::Config(format!("Invalid FINGERPRINT_DENY_THRESHOLD: {}", e))
+            })?;
+
+        if deny_threshold > 100 {
+            return Err(ArmorError::Config(
+                "FINGERPRINT_DENY_THRESHOLD must be 0-100".to_string(),
+            ));
+        }
+
+        let challenge_threshold = env::var("FINGERPRINT_CHALLENGE_THRESHOLD")
+            .unwrap_or_else(|_| "70".to_string())
+            .parse::<u32>()
+            .map_err(|e| {
+                ArmorError::Config(format!("Invalid FINGERPRINT_CHALLENGE_THRESHOLD: {}", e))
+            })?;
+
+        if challenge_threshold > 100 {
+            return Err(ArmorError::Config(
+                "FINGERPRINT_CHALLENGE_THRESHOLD must be 0-100".to_string(),
+            ));
+        }
+
+        if challenge_threshold > deny_threshold {
+            return Err(ArmorError::Config(
+                "FINGERPRINT_CHALLENGE_THRESHOLD must be <= FINGERPRINT_DENY_THRESHOLD"
+                    .to_string(),
+            ));
+        }
+
+        let user_agent_whitelist = env::var("FINGERPRINT_USER_AGENT_WHITELIST")
+            .unwrap_or_else(|_| String::new())
+            .split(',')
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.trim().to_lowercase())
+            .collect();
+
+        let user_agent_blacklist = env::var("FINGERPRINT_USER_AGENT_BLACKLIST")
+            .unwrap_or_else(|_| String::new())
+            .split(',')
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.trim().to_lowercase())
+            .collect();
+
+        let strict_header_order = env::var("FINGERPRINT_STRICT_HEADER_ORDER")
+            .unwrap_or_else(|_| "false".to_string())
+            .parse::<bool>()
+            .map_err(|e| {
+                ArmorError::Config(format!("Invalid FINGERPRINT_STRICT_HEADER_ORDER: {}", e))
+            })?;
+
+        let require_common_headers = env::var("FINGERPRINT_REQUIRE_COMMON_HEADERS")
+            .unwrap_or_else(|_| "true".to_string())
+            .parse::<bool>()
+            .map_err(|e| {
+                ArmorError::Config(format!("Invalid FINGERPRINT_REQUIRE_COMMON_HEADERS: {}", e))
+            })?;
+
+        Ok(Self {
+            enabled,
+            deny_threshold,
+            challenge_threshold,
+            user_agent_whitelist,
+            user_agent_blacklist,
+            strict_header_order,
+            require_common_headers,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,6 +329,101 @@ mod tests {
                 assert_eq!(config.enabled, true);
                 assert_eq!(config.requests_per_second, 500);
                 assert_eq!(config.burst_capacity, 50);
+            },
+        );
+    }
+
+    #[test]
+    fn test_fingerprint_defaults() {
+        temp_env::with_vars_unset(
+            vec![
+                "FINGERPRINT_ENABLED",
+                "FINGERPRINT_DENY_THRESHOLD",
+                "FINGERPRINT_CHALLENGE_THRESHOLD",
+                "FINGERPRINT_USER_AGENT_WHITELIST",
+                "FINGERPRINT_USER_AGENT_BLACKLIST",
+                "FINGERPRINT_STRICT_HEADER_ORDER",
+                "FINGERPRINT_REQUIRE_COMMON_HEADERS",
+            ],
+            || {
+                let config = FingerprintConfig::from_env().unwrap();
+                assert_eq!(config.enabled, true);
+                assert_eq!(config.deny_threshold, 85);
+                assert_eq!(config.challenge_threshold, 70);
+                assert!(config.user_agent_whitelist.is_empty());
+                assert!(config.user_agent_blacklist.is_empty());
+                assert_eq!(config.strict_header_order, false);
+                assert_eq!(config.require_common_headers, true);
+            },
+        );
+    }
+
+    #[test]
+    fn test_fingerprint_custom() {
+        temp_env::with_vars(
+            vec![
+                ("FINGERPRINT_ENABLED", Some("true")),
+                ("FINGERPRINT_DENY_THRESHOLD", Some("90")),
+                ("FINGERPRINT_CHALLENGE_THRESHOLD", Some("75")),
+                ("FINGERPRINT_USER_AGENT_WHITELIST", Some("googlebot,bingbot")),
+                ("FINGERPRINT_USER_AGENT_BLACKLIST", Some("curl,wget")),
+                ("FINGERPRINT_STRICT_HEADER_ORDER", Some("true")),
+                ("FINGERPRINT_REQUIRE_COMMON_HEADERS", Some("false")),
+            ],
+            || {
+                let config = FingerprintConfig::from_env().unwrap();
+                assert_eq!(config.enabled, true);
+                assert_eq!(config.deny_threshold, 90);
+                assert_eq!(config.challenge_threshold, 75);
+                assert_eq!(config.user_agent_whitelist.len(), 2);
+                assert!(config.user_agent_whitelist.contains(&"googlebot".to_string()));
+                assert_eq!(config.user_agent_blacklist.len(), 2);
+                assert!(config.user_agent_blacklist.contains(&"curl".to_string()));
+                assert_eq!(config.strict_header_order, true);
+                assert_eq!(config.require_common_headers, false);
+            },
+        );
+    }
+
+    #[test]
+    fn test_fingerprint_threshold_validation() {
+        temp_env::with_vars(vec![("FINGERPRINT_DENY_THRESHOLD", Some("101"))], || {
+            let result = FingerprintConfig::from_env();
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("must be 0-100"));
+        });
+        
+        temp_env::with_vars(
+            vec![
+                ("FINGERPRINT_DENY_THRESHOLD", Some("70")),
+                ("FINGERPRINT_CHALLENGE_THRESHOLD", Some("80")),
+            ],
+            || {
+                let result = FingerprintConfig::from_env();
+                assert!(result.is_err());
+                assert!(result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("CHALLENGE_THRESHOLD must be <="));
+            },
+        );
+    }
+
+    #[test]
+    fn test_fingerprint_whitelist_parsing() {
+        temp_env::with_vars(
+            vec![(
+                "FINGERPRINT_USER_AGENT_WHITELIST",
+                Some(" Googlebot , Bingbot , "),
+            )],
+            || {
+                let config = FingerprintConfig::from_env().unwrap();
+                assert_eq!(config.user_agent_whitelist.len(), 2);
+                assert!(config.user_agent_whitelist.contains(&"googlebot".to_string()));
+                assert!(config.user_agent_whitelist.contains(&"bingbot".to_string()));
             },
         );
     }
