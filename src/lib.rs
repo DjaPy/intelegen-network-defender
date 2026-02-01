@@ -6,6 +6,7 @@
 //! - Anti-Slowloris protection
 //! - Challenge-response system
 
+pub mod config;
 pub mod error;
 pub mod filter;
 pub mod proxy;
