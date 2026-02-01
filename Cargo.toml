@@ -1,0 +1,33 @@
+[package]
+name = "intellegen-http-defender"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+redis-storage = ["redis"]
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.49", features = ["full"] }
+
+# HTTP server
+hyper = { version = "1.8.1", features = ["full"] }
+hyper-util = { version = "0.1.19", features = ["full", "tokio", "server-auto"] }
+http-body-util = "0.1.3"
+
+# Error handling
+thiserror = "2.0.18"
+
+# Async traits
+async-trait = "0.1"
+
+# Concurrent data structures
+dashmap = "6.1"
+
+# Redis client (optional, for distributed rate limiting)
+redis = { version = "1.0.3", features = ["aio", "tokio-comp"], optional = true }
+
+# Logging
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
