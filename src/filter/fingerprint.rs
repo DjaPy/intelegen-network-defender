@@ -123,7 +123,7 @@ struct HeaderPatterns {
 impl HeaderPatterns {
     fn new() -> Self {
         let mut known_browsers = HashMap::new();
-        
+
         known_browsers.insert(
             "chrome",
             vec![
@@ -139,7 +139,7 @@ impl HeaderPatterns {
                 "accept-language",
             ],
         );
-        
+
         known_browsers.insert(
             "firefox",
             vec![
@@ -198,7 +198,7 @@ impl FingerprintFilter {
         {
             return (0, vec!["User-Agent whitelisted".to_string()]);
         }
-        
+
         if self
             .config
             .user_agent_blacklist
@@ -207,7 +207,7 @@ impl FingerprintFilter {
         {
             return (50, vec!["User-Agent blacklisted".to_string()]);
         }
-        
+
         for signature in &self.user_agent_patterns.bot_signatures {
             if ua_lower.contains(signature.pattern) {
                 score += signature.score;
@@ -217,7 +217,7 @@ impl FingerprintFilter {
                 ));
             }
         }
-        
+
         if user_agent.is_empty() {
             score += 20;
             reasons.push("Missing User-Agent header".to_string());
@@ -232,7 +232,7 @@ impl FingerprintFilter {
                 reasons.push("Unusually long User-Agent".to_string());
             }
         }
-        
+
         (score.min(50), reasons)
     }
 
@@ -240,12 +240,12 @@ impl FingerprintFilter {
     fn score_header_order(&self, headers: &HeaderMap) -> (u32, Vec<String>) {
         let mut score = 0;
         let mut reasons = Vec::new();
-        
+
         let header_names: Vec<String> = headers
             .iter()
             .map(|(name, _)| name.as_str().to_lowercase())
             .collect();
-        
+
         let mut best_similarity = 0.0;
         for (browser_name, pattern) in &self.header_patterns.known_browsers {
             let similarity = calculate_jaccard_similarity(&header_names, pattern);
@@ -267,11 +267,9 @@ impl FingerprintFilter {
                 score += 15;
                 reasons.push("Header order partially matches browser patterns".to_string());
             }
-        } else {
-            if best_similarity < 0.2 {
-                score += 20;
-                reasons.push("Header order highly unusual".to_string());
-            }
+        } else if best_similarity < 0.2 {
+            score += 20;
+            reasons.push("Header order highly unusual".to_string());
         }
 
         (score, reasons)
@@ -285,7 +283,7 @@ impl FingerprintFilter {
         if !self.config.require_common_headers {
             return (0, reasons);
         }
-        
+
         let expected_headers = [
             ("user-agent", 10),
             ("accept", 5),
@@ -435,14 +433,8 @@ mod tests {
 
     #[test]
     fn test_user_agent_whitelist() {
-        let config = FingerprintConfig::new(
-            85,
-            70,
-            vec!["googlebot".to_string()],
-            vec![],
-            false,
-            true,
-        );
+        let config =
+            FingerprintConfig::new(85, 70, vec!["googlebot".to_string()], vec![], false, true);
         let filter = FingerprintFilter::new(config);
 
         let (score, _) = filter.score_user_agent("Mozilla/5.0 (compatible; Googlebot/2.1)");
@@ -451,14 +443,7 @@ mod tests {
 
     #[test]
     fn test_user_agent_blacklist() {
-        let config = FingerprintConfig::new(
-            85,
-            70,
-            vec![],
-            vec!["curl".to_string()],
-            false,
-            true,
-        );
+        let config = FingerprintConfig::new(85, 70, vec![], vec!["curl".to_string()], false, true);
         let filter = FingerprintFilter::new(config);
 
         let (score, _) = filter.score_user_agent("curl/7.64.1");

@@ -66,9 +66,8 @@ bench:
     cargo bench
 
 all-check:
-    fmt-check
-    fmt
-    lint
-    audit
-    test
-    bench
+    just fmt
+    just lint
+    just audit
+    just test
+    just bench

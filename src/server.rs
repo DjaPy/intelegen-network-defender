@@ -10,17 +10,17 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use http_body_util::Full;
+use hyper::body::{Bytes, Incoming};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
-use http_body_util::Full;
-use hyper::body::{Bytes, Incoming};
 use tokio::net::TcpListener;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 
 use crate::error::{ArmorError, Result};
-use crate::filter::{FilterChain, FilterAction};
+use crate::filter::{FilterAction, FilterChain};
 use crate::proxy::ProxyClient;
 
 /// Main server struct with integrated filter chain and proxy
@@ -41,7 +41,8 @@ impl Server {
             .await
             .map_err(|e| ArmorError::Bind { addr, source: e })?;
 
-        let actual_addr = listener.local_addr()
+        let actual_addr = listener
+            .local_addr()
             .map_err(|e| ArmorError::Config(format!("Failed to get local address: {}", e)))?;
 
         info!(%actual_addr, "Server bound successfully");
@@ -74,10 +75,7 @@ impl Server {
                 let service = service_fn(move |req| {
                     handle_request(req, remote_addr, filter_chain.clone(), proxy_client.clone())
                 });
-                if let Err(e) = http1::Builder::new()
-                    .serve_connection(io, service)
-                    .await
-                {
+                if let Err(e) = http1::Builder::new().serve_connection(io, service).await {
                     warn!(%remote_addr, %e, "Connection error");
                 }
             });

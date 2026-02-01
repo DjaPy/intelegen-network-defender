@@ -2,29 +2,22 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use hyper::{Request, Response, StatusCode};
+use http_body_util::Full;
 use hyper::body::{Bytes, Incoming};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use hyper_util::rt::TokioIo;
+use hyper::{Request, Response, StatusCode};
 use hyper_util::client::legacy::{Client, connect::HttpConnector};
-use http_body_util::Full;
+use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
 
-use intellegen_http_defender::filter::{
-    Filter, FilterAction, FilterChain, PassthroughFilter,
-};
-
+use intellegen_http_defender::filter::{Filter, FilterAction, FilterChain, PassthroughFilter};
 
 struct DenyAllFilter;
 
 #[async_trait::async_trait]
 impl Filter for DenyAllFilter {
-    async fn filter(
-        &self,
-        _req: &Request<Incoming>,
-        _remote_addr: SocketAddr,
-    ) -> FilterAction {
+    async fn filter(&self, _req: &Request<Incoming>, _remote_addr: SocketAddr) -> FilterAction {
         FilterAction::Deny {
             status: 403,
             reason: "Denied by test filter".to_string(),
@@ -42,11 +35,7 @@ struct CountingFilter {
 
 #[async_trait::async_trait]
 impl Filter for CountingFilter {
-    async fn filter(
-        &self,
-        _req: &Request<Incoming>,
-        _remote_addr: SocketAddr,
-    ) -> FilterAction {
+    async fn filter(&self, _req: &Request<Incoming>, _remote_addr: SocketAddr) -> FilterAction {
         self.count.fetch_add(1, Ordering::SeqCst);
         FilterAction::Allow
     }
@@ -56,9 +45,7 @@ impl Filter for CountingFilter {
     }
 }
 
-async fn run_test_server(
-    chain: Arc<FilterChain>,
-) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+async fn run_test_server(chain: Arc<FilterChain>) -> (SocketAddr, tokio::task::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
 
@@ -75,14 +62,10 @@ async fn run_test_server(
             tokio::spawn(async move {
                 let service = service_fn(move |req| {
                     let chain = chain.clone();
-                    async move {
-                        handle_request(req, chain, remote_addr).await
-                    }
+                    async move { handle_request(req, chain, remote_addr).await }
                 });
 
-                let _ = http1::Builder::new()
-                    .serve_connection(io, service)
-                    .await;
+                let _ = http1::Builder::new().serve_connection(io, service).await;
             });
         }
     });
@@ -110,13 +93,10 @@ async fn handle_request(
 
 #[tokio::test]
 async fn test_passthrough_filter_with_real_http() {
-    let chain = Arc::new(
-        FilterChain::new()
-            .add_filter(Arc::new(PassthroughFilter))
-    );
+    let chain = Arc::new(FilterChain::new().add_filter(Arc::new(PassthroughFilter)));
 
     let (addr, server_handle) = run_test_server(chain).await;
-    
+
     let client: Client<HttpConnector, Full<Bytes>> =
         Client::builder(hyper_util::rt::TokioExecutor::new()).build_http();
     let uri = format!("http://{}/test", addr);
@@ -129,10 +109,7 @@ async fn test_passthrough_filter_with_real_http() {
 
 #[tokio::test]
 async fn test_deny_all_filter_with_real_http() {
-    let chain = Arc::new(
-        FilterChain::new()
-            .add_filter(Arc::new(DenyAllFilter))
-    );
+    let chain = Arc::new(FilterChain::new().add_filter(Arc::new(DenyAllFilter)));
 
     let (addr, server_handle) = run_test_server(chain).await;
 
@@ -152,9 +129,13 @@ async fn test_filter_chain_short_circuit() {
 
     let chain = Arc::new(
         FilterChain::new()
-            .add_filter(Arc::new(CountingFilter { count: count.clone() }))
+            .add_filter(Arc::new(CountingFilter {
+                count: count.clone(),
+            }))
             .add_filter(Arc::new(DenyAllFilter))
-            .add_filter(Arc::new(CountingFilter { count: count.clone() }))
+            .add_filter(Arc::new(CountingFilter {
+                count: count.clone(),
+            })),
     );
 
     let (addr, server_handle) = run_test_server(chain).await;
@@ -176,8 +157,10 @@ async fn test_multiple_requests_through_chain() {
 
     let chain = Arc::new(
         FilterChain::new()
-            .add_filter(Arc::new(CountingFilter { count: count.clone() }))
-            .add_filter(Arc::new(PassthroughFilter))
+            .add_filter(Arc::new(CountingFilter {
+                count: count.clone(),
+            }))
+            .add_filter(Arc::new(PassthroughFilter)),
     );
 
     let (addr, server_handle) = run_test_server(chain).await;
