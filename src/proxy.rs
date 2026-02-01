@@ -129,6 +129,7 @@ impl ProxyClient {
 
         headers.insert("x-real-ip", client_addr.ip().to_string().parse().unwrap());
 
+        #[allow(clippy::collapsible_if)]
         if !self.config.preserve_host {
             if let Some(authority) = self.upstream_uri.authority() {
                 headers.insert("host", authority.as_str().parse().unwrap());
