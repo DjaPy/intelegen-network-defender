@@ -125,15 +125,16 @@ impl RateLimitConfig {
         let requests_per_second = env::var("RATE_LIMIT_REQUESTS_PER_SECOND")
             .unwrap_or_else(|_| "100".to_string())
             .parse::<u32>()
-            .map_err(|e| ArmorError::Config(format!("Invalid RATE_LIMIT_REQUESTS_PER_SECOND: {}", e)))?;
+            .map_err(|e| {
+                ArmorError::Config(format!("Invalid RATE_LIMIT_REQUESTS_PER_SECOND: {}", e))
+            })?;
 
         let burst_capacity = env::var("RATE_LIMIT_BURST_CAPACITY")
             .unwrap_or_else(|_| "10".to_string())
             .parse::<u32>()
             .map_err(|e| ArmorError::Config(format!("Invalid RATE_LIMIT_BURST_CAPACITY: {}", e)))?;
 
-        let storage_str = env::var("RATE_LIMIT_STORAGE")
-            .unwrap_or_else(|_| "memory".to_string());
+        let storage_str = env::var("RATE_LIMIT_STORAGE").unwrap_or_else(|_| "memory".to_string());
 
         let storage = match storage_str.to_lowercase().as_str() {
             "memory" => StorageType::Memory,
@@ -150,8 +151,9 @@ impl RateLimitConfig {
         let redis_url = if storage == StorageType::Memory {
             None
         } else {
-            Some(env::var("REDIS_URL")
-                .map_err(|_| ArmorError::Config("REDIS_URL is required when using Redis storage".to_string()))?)
+            Some(env::var("REDIS_URL").map_err(|_| {
+                ArmorError::Config("REDIS_URL is required when using Redis storage".to_string())
+            })?)
         };
 
         Ok(Self {
@@ -199,8 +201,7 @@ impl FingerprintConfig {
 
         if challenge_threshold > deny_threshold {
             return Err(ArmorError::Config(
-                "FINGERPRINT_CHALLENGE_THRESHOLD must be <= FINGERPRINT_DENY_THRESHOLD"
-                    .to_string(),
+                "FINGERPRINT_CHALLENGE_THRESHOLD must be <= FINGERPRINT_DENY_THRESHOLD".to_string(),
             ));
         }
 
@@ -260,7 +261,10 @@ mod tests {
     #[test]
     fn test_server_config_custom() {
         temp_env::with_vars(
-            vec![("SERVER_HOST", Some("0.0.0.0")), ("SERVER_PORT", Some("3000"))],
+            vec![
+                ("SERVER_HOST", Some("0.0.0.0")),
+                ("SERVER_PORT", Some("3000")),
+            ],
             || {
                 let config = ServerConfig::from_env().unwrap();
                 assert_eq!(config.host, "0.0.0.0");
@@ -274,7 +278,12 @@ mod tests {
         temp_env::with_var_unset("PROXY_UPSTREAM_URL", || {
             let result = ProxyConfig::from_env();
             assert!(result.is_err());
-            assert!(result.unwrap_err().to_string().contains("PROXY_UPSTREAM_URL"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("PROXY_UPSTREAM_URL")
+            );
         });
     }
 
@@ -290,7 +299,7 @@ mod tests {
                 let config = ProxyConfig::from_env().unwrap();
                 assert_eq!(config.upstream_url, "http://backend:8000");
                 assert_eq!(config.timeout, Duration::from_secs(30));
-                assert_eq!(config.preserve_host, false);
+                assert!(!config.preserve_host);
             },
         );
     }
@@ -306,7 +315,7 @@ mod tests {
             ],
             || {
                 let config = RateLimitConfig::from_env().unwrap();
-                assert_eq!(config.enabled, true);
+                assert!(config.enabled);
                 assert_eq!(config.requests_per_second, 100);
                 assert_eq!(config.burst_capacity, 10);
                 assert_eq!(config.storage, StorageType::Memory);
@@ -326,7 +335,7 @@ mod tests {
             ],
             || {
                 let config = RateLimitConfig::from_env().unwrap();
-                assert_eq!(config.enabled, true);
+                assert!(config.enabled);
                 assert_eq!(config.requests_per_second, 500);
                 assert_eq!(config.burst_capacity, 50);
             },
@@ -347,13 +356,13 @@ mod tests {
             ],
             || {
                 let config = FingerprintConfig::from_env().unwrap();
-                assert_eq!(config.enabled, true);
+                assert!(config.enabled);
                 assert_eq!(config.deny_threshold, 85);
                 assert_eq!(config.challenge_threshold, 70);
                 assert!(config.user_agent_whitelist.is_empty());
                 assert!(config.user_agent_blacklist.is_empty());
-                assert_eq!(config.strict_header_order, false);
-                assert_eq!(config.require_common_headers, true);
+                assert!(!config.strict_header_order);
+                assert!(config.require_common_headers);
             },
         );
     }
@@ -365,22 +374,29 @@ mod tests {
                 ("FINGERPRINT_ENABLED", Some("true")),
                 ("FINGERPRINT_DENY_THRESHOLD", Some("90")),
                 ("FINGERPRINT_CHALLENGE_THRESHOLD", Some("75")),
-                ("FINGERPRINT_USER_AGENT_WHITELIST", Some("googlebot,bingbot")),
+                (
+                    "FINGERPRINT_USER_AGENT_WHITELIST",
+                    Some("googlebot,bingbot"),
+                ),
                 ("FINGERPRINT_USER_AGENT_BLACKLIST", Some("curl,wget")),
                 ("FINGERPRINT_STRICT_HEADER_ORDER", Some("true")),
                 ("FINGERPRINT_REQUIRE_COMMON_HEADERS", Some("false")),
             ],
             || {
                 let config = FingerprintConfig::from_env().unwrap();
-                assert_eq!(config.enabled, true);
+                assert!(config.enabled);
                 assert_eq!(config.deny_threshold, 90);
                 assert_eq!(config.challenge_threshold, 75);
                 assert_eq!(config.user_agent_whitelist.len(), 2);
-                assert!(config.user_agent_whitelist.contains(&"googlebot".to_string()));
+                assert!(
+                    config
+                        .user_agent_whitelist
+                        .contains(&"googlebot".to_string())
+                );
                 assert_eq!(config.user_agent_blacklist.len(), 2);
                 assert!(config.user_agent_blacklist.contains(&"curl".to_string()));
-                assert_eq!(config.strict_header_order, true);
-                assert_eq!(config.require_common_headers, false);
+                assert!(config.strict_header_order);
+                assert!(!config.require_common_headers);
             },
         );
     }
@@ -390,12 +406,9 @@ mod tests {
         temp_env::with_vars(vec![("FINGERPRINT_DENY_THRESHOLD", Some("101"))], || {
             let result = FingerprintConfig::from_env();
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("must be 0-100"));
+            assert!(result.unwrap_err().to_string().contains("must be 0-100"));
         });
-        
+
         temp_env::with_vars(
             vec![
                 ("FINGERPRINT_DENY_THRESHOLD", Some("70")),
@@ -404,10 +417,12 @@ mod tests {
             || {
                 let result = FingerprintConfig::from_env();
                 assert!(result.is_err());
-                assert!(result
-                    .unwrap_err()
-                    .to_string()
-                    .contains("CHALLENGE_THRESHOLD must be <="));
+                assert!(
+                    result
+                        .unwrap_err()
+                        .to_string()
+                        .contains("CHALLENGE_THRESHOLD must be <=")
+                );
             },
         );
     }
@@ -422,7 +437,11 @@ mod tests {
             || {
                 let config = FingerprintConfig::from_env().unwrap();
                 assert_eq!(config.user_agent_whitelist.len(), 2);
-                assert!(config.user_agent_whitelist.contains(&"googlebot".to_string()));
+                assert!(
+                    config
+                        .user_agent_whitelist
+                        .contains(&"googlebot".to_string())
+                );
                 assert!(config.user_agent_whitelist.contains(&"bingbot".to_string()));
             },
         );

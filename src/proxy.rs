@@ -8,12 +8,12 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use hyper::{Request, Response, Uri, HeaderMap};
-use hyper::body::Incoming;
-use hyper_util::client::legacy::{Client, connect::HttpConnector};
-use hyper_util::rt::TokioExecutor;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
+use hyper::body::Incoming;
+use hyper::{HeaderMap, Request, Response, Uri};
+use hyper_util::client::legacy::{Client, connect::HttpConnector};
+use hyper_util::rt::TokioExecutor;
 
 use crate::error::{ArmorError, Result};
 
@@ -57,11 +57,12 @@ pub struct ProxyClient {
 
 impl ProxyClient {
     pub fn new(config: ProxyConfig) -> Result<Self> {
-        let upstream_uri: Uri = config.upstream_url.parse()
+        let upstream_uri: Uri = config
+            .upstream_url
+            .parse()
             .map_err(|e| ArmorError::Config(format!("Invalid upstream URL: {}", e)))?;
-        
-        let client = Client::builder(TokioExecutor::new())
-            .build_http();
+
+        let client = Client::builder(TokioExecutor::new()).build_http();
 
         Ok(Self {
             config,
@@ -69,38 +70,43 @@ impl ProxyClient {
             upstream_uri,
         })
     }
-    
+
     pub async fn forward(
         &self,
         mut req: Request<Incoming>,
         client_addr: SocketAddr,
     ) -> Result<Response<Full<Bytes>>> {
-        let upstream_path = req.uri().path_and_query()
+        let upstream_path = req
+            .uri()
+            .path_and_query()
             .map(|pq| pq.as_str())
             .unwrap_or("/");
 
         let upstream_uri = format!(
             "{}://{}{}",
             self.upstream_uri.scheme_str().unwrap_or("http"),
-            self.upstream_uri.authority().map(|a| a.as_str()).unwrap_or("localhost"),
+            self.upstream_uri
+                .authority()
+                .map(|a| a.as_str())
+                .unwrap_or("localhost"),
             upstream_path
         );
 
-        *req.uri_mut() = upstream_uri.parse()
+        *req.uri_mut() = upstream_uri
+            .parse()
             .map_err(|e| ArmorError::Upstream(format!("Failed to parse upstream URI: {}", e)))?;
-        
+
         self.rewrite_headers(req.headers_mut(), client_addr);
 
-        let response = tokio::time::timeout(
-            self.config.timeout,
-            self.client.request(req)
-        )
-        .await
-        .map_err(|_| ArmorError::Upstream("Upstream request timeout".to_string()))?
-        .map_err(|e| ArmorError::Upstream(format!("Upstream request failed: {}", e)))?;
+        let response = tokio::time::timeout(self.config.timeout, self.client.request(req))
+            .await
+            .map_err(|_| ArmorError::Upstream("Upstream request timeout".to_string()))?
+            .map_err(|e| ArmorError::Upstream(format!("Upstream request failed: {}", e)))?;
 
         let (parts, body) = response.into_parts();
-        let body_bytes = body.collect().await
+        let body_bytes = body
+            .collect()
+            .await
             .map_err(|e| ArmorError::Upstream(format!("Failed to read upstream response: {}", e)))?
             .to_bytes();
 
@@ -120,15 +126,16 @@ impl ProxyClient {
         } else {
             headers.insert("x-forwarded-for", client_ip.parse().unwrap());
         }
-        
+
         headers.insert("x-real-ip", client_addr.ip().to_string().parse().unwrap());
-        
+
+        #[allow(clippy::collapsible_if)]
         if !self.config.preserve_host {
             if let Some(authority) = self.upstream_uri.authority() {
                 headers.insert("host", authority.as_str().parse().unwrap());
             }
         }
-        
+
         headers.remove("connection");
         headers.remove("keep-alive");
         headers.remove("proxy-authenticate");
@@ -152,7 +159,7 @@ mod tests {
 
         assert_eq!(config.upstream_url, "http://localhost:3000");
         assert_eq!(config.timeout, Duration::from_secs(10));
-        assert_eq!(config.preserve_host, true);
+        assert!(config.preserve_host);
     }
 
     #[test]

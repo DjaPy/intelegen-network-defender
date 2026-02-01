@@ -13,7 +13,7 @@ use hyper::body::Incoming;
 #[cfg(feature = "redis-storage")]
 use redis::AsyncCommands;
 
-use super::{Filter, FilterAction, ChallengeType};
+use super::{ChallengeType, Filter, FilterAction};
 
 /// Error type for rate limit storage operations
 #[derive(Debug, thiserror::Error)]
@@ -35,7 +35,6 @@ pub trait RateLimitStorage: Send + Sync {
         delay_tolerance_nanos: u64,
     ) -> Result<Option<u64>>;
 }
-
 
 pub struct InMemoryStorage {
     state: DashMap<String, u64>,
@@ -69,7 +68,7 @@ impl RateLimitStorage for InMemoryStorage {
 
         let tat = *entry;
         let allow_at = tat.saturating_sub(delay_tolerance_nanos);
-        
+
         if now_nanos <= allow_at {
             let retry_after_nanos = allow_at.saturating_sub(now_nanos) + 1;
             return Ok(Some(retry_after_nanos));
@@ -91,8 +90,8 @@ pub struct RedisStorage {
 #[cfg(feature = "redis-storage")]
 impl RedisStorage {
     pub fn new(redis_url: &str) -> Result<Self> {
-        let client = redis::Client::open(redis_url)
-            .map_err(|e| StorageError::Redis(e.to_string()))?;
+        let client =
+            redis::Client::open(redis_url).map_err(|e| StorageError::Redis(e.to_string()))?;
 
         Ok(Self {
             client: Arc::new(client),
@@ -114,14 +113,16 @@ impl RateLimitStorage for RedisStorage {
         emission_interval_nanos: u64,
         delay_tolerance_nanos: u64,
     ) -> Result<Option<u64>> {
-        let mut conn = self.client
+        let mut conn = self
+            .client
             .get_multiplexed_async_connection()
             .await
             .map_err(|e| StorageError::Redis(e.to_string()))?;
 
         let redis_key = Self::redis_key(key);
 
-        let tat: Option<u64> = conn.get(&redis_key)
+        let tat: Option<u64> = conn
+            .get(&redis_key)
             .await
             .map_err(|e| StorageError::Redis(e.to_string()))?;
 
@@ -136,7 +137,8 @@ impl RateLimitStorage for RedisStorage {
         let new_tat = tat.max(now_nanos) + emission_interval_nanos;
         let ttl_secs = (delay_tolerance_nanos / 1_000_000_000) + 60;
 
-        conn.set_ex(&redis_key, new_tat, ttl_secs as u64)
+        let _: () = conn
+            .set_ex(&redis_key, new_tat, ttl_secs)
             .await
             .map_err(|e| StorageError::Redis(e.to_string()))?;
 
@@ -200,12 +202,16 @@ impl RateLimitFilter {
 
         let key = addr.ip().to_string();
 
-        match self.storage.check_and_update(
-            &key,
-            now_nanos,
-            self.config.emission_interval_nanos(),
-            self.config.delay_tolerance_nanos(),
-        ).await {
+        match self
+            .storage
+            .check_and_update(
+                &key,
+                now_nanos,
+                self.config.emission_interval_nanos(),
+                self.config.delay_tolerance_nanos(),
+            )
+            .await
+        {
             Ok(Some(retry_after_nanos)) => {
                 let retry_after = (retry_after_nanos / 1_000_000_000).max(1) as u32;
                 FilterAction::Challenge {
@@ -223,11 +229,7 @@ impl RateLimitFilter {
 
 #[async_trait::async_trait]
 impl Filter for RateLimitFilter {
-    async fn filter(
-        &self,
-        _req: &Request<Incoming>,
-        remote_addr: SocketAddr,
-    ) -> FilterAction {
+    async fn filter(&self, _req: &Request<Incoming>, remote_addr: SocketAddr) -> FilterAction {
         self.check_rate_limit(remote_addr).await
     }
 

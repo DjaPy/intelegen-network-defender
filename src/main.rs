@@ -4,11 +4,13 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use intellegen_http_defender::config::{Config, StorageType};
-use intellegen_http_defender::server::Server;
-use intellegen_http_defender::filter::{FilterChain, PassthroughFilter, RateLimitFilter, FingerprintFilter};
 use intellegen_http_defender::filter::RateLimitConfig;
+use intellegen_http_defender::filter::{
+    FilterChain, FingerprintFilter, PassthroughFilter, RateLimitFilter,
+};
 use intellegen_http_defender::proxy::{ProxyClient, ProxyConfig as ProxyClientConfig};
-use tracing::{info, Level};
+use intellegen_http_defender::server::Server;
+use tracing::{Level, info};
 use tracing_subscriber::FmtSubscriber;
 
 #[tokio::main]
@@ -23,21 +25,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     info!("Starting Intellegen HTTP Defender");
     info!("Server: {}:{}", config.server.host, config.server.port);
     info!("Upstream: {}", config.proxy.upstream_url);
-    info!("Fingerprinting: enabled={}, deny_threshold={}, challenge_threshold={}",
-          config.fingerprint.enabled,
-          config.fingerprint.deny_threshold,
-          config.fingerprint.challenge_threshold);
-    info!("Rate limiting: enabled={}, rps={}, burst={}",
-          config.rate_limit.enabled,
-          config.rate_limit.requests_per_second,
-          config.rate_limit.burst_capacity);
+    info!(
+        "Fingerprinting: enabled={}, deny_threshold={}, challenge_threshold={}",
+        config.fingerprint.enabled,
+        config.fingerprint.deny_threshold,
+        config.fingerprint.challenge_threshold
+    );
+    info!(
+        "Rate limiting: enabled={}, rps={}, burst={}",
+        config.rate_limit.enabled,
+        config.rate_limit.requests_per_second,
+        config.rate_limit.burst_capacity
+    );
 
     let addr: SocketAddr = format!("{}:{}", config.server.host, config.server.port)
         .parse()
         .map_err(|e| format!("Invalid server address: {}", e))?;
 
     let mut filter_chain = FilterChain::new();
-    
+
     if config.fingerprint.enabled {
         info!("Fingerprint detection enabled: user_agent checks, header analysis");
         let fingerprint_config = intellegen_http_defender::filter::FingerprintConfig::new(
@@ -66,7 +72,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             #[cfg(feature = "redis-storage")]
             StorageType::Redis => {
                 use intellegen_http_defender::filter::rate_limit::RedisStorage;
-                let redis_url = config.rate_limit.redis_url
+                let redis_url = config
+                    .rate_limit
+                    .redis_url
                     .as_ref()
                     .expect("Redis URL required for Redis storage");
                 info!("Using Redis rate limiting storage: {}", redis_url);

@@ -1,23 +1,21 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use hyper::{Request, Response, StatusCode};
+use http_body_util::Full;
 use hyper::body::{Bytes, Incoming};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use hyper_util::rt::TokioIo;
+use hyper::{Request, Response, StatusCode};
 use hyper_util::client::legacy::{Client, connect::HttpConnector};
-use http_body_util::Full;
+use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
 
 use intellegen_http_defender::filter::{
-    FilterAction, FilterChain, FingerprintFilter, FingerprintConfig,
-    RateLimitFilter, RateLimitConfig,
+    FilterAction, FilterChain, FingerprintConfig, FingerprintFilter, RateLimitConfig,
+    RateLimitFilter,
 };
 
-async fn run_test_server(
-    chain: Arc<FilterChain>,
-) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+async fn run_test_server(chain: Arc<FilterChain>) -> (SocketAddr, tokio::task::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
 
@@ -34,14 +32,10 @@ async fn run_test_server(
             tokio::spawn(async move {
                 let service = service_fn(move |req| {
                     let chain = chain.clone();
-                    async move {
-                        handle_request(req, chain, remote_addr).await
-                    }
+                    async move { handle_request(req, chain, remote_addr).await }
                 });
 
-                let _ = http1::Builder::new()
-                    .serve_connection(io, service)
-                    .await;
+                let _ = http1::Builder::new().serve_connection(io, service).await;
             });
         }
     });
@@ -70,8 +64,8 @@ async fn handle_request(
 #[tokio::test]
 async fn test_fingerprint_allows_normal_browser() {
     let config = FingerprintConfig::new(
-        85,  // deny_threshold
-        70,  // challenge_threshold
+        85, // deny_threshold
+        70, // challenge_threshold
         vec![],
         vec![],
         false,
@@ -103,8 +97,8 @@ async fn test_fingerprint_allows_normal_browser() {
 #[tokio::test]
 async fn test_fingerprint_denies_curl() {
     let config = FingerprintConfig::new(
-        50,  // Lower deny threshold for testing
-        40,  // Lower challenge threshold for testing
+        50, // Lower deny threshold for testing
+        40, // Lower challenge threshold for testing
         vec![],
         vec![],
         false,
@@ -133,8 +127,8 @@ async fn test_fingerprint_denies_curl() {
 #[tokio::test]
 async fn test_fingerprint_denies_wget() {
     let config = FingerprintConfig::new(
-        50,  // Lower deny threshold for testing
-        40,  // Lower challenge threshold for testing
+        50, // Lower deny threshold for testing
+        40, // Lower challenge threshold for testing
         vec![],
         vec![],
         false,
@@ -163,8 +157,8 @@ async fn test_fingerprint_denies_wget() {
 #[tokio::test]
 async fn test_fingerprint_challenges_suspicious() {
     let config = FingerprintConfig::new(
-        50,  // deny_threshold (lower for testing)
-        25,  // challenge_threshold (lowered to trigger challenge)
+        50, // deny_threshold (lower for testing)
+        25, // challenge_threshold (lowered to trigger challenge)
         vec![],
         vec![],
         false,
@@ -177,7 +171,7 @@ async fn test_fingerprint_challenges_suspicious() {
 
     let client: Client<HttpConnector, Full<Bytes>> =
         Client::builder(hyper_util::rt::TokioExecutor::new()).build_http();
-    
+
     let req = Request::builder()
         .uri(format!("http://{}/test", addr))
         .header("User-Agent", "MyCustomBot/1.0")
@@ -195,7 +189,7 @@ async fn test_fingerprint_respects_whitelist() {
     let config = FingerprintConfig::new(
         85,
         70,
-        vec!["googlebot".to_string()],  // whitelist
+        vec!["googlebot".to_string()], // whitelist
         vec![],
         false,
         true,
@@ -210,7 +204,10 @@ async fn test_fingerprint_respects_whitelist() {
 
     let req = Request::builder()
         .uri(format!("http://{}/test", addr))
-        .header("User-Agent", "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)")
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+        )
         .body(Full::new(Bytes::new()))
         .unwrap();
 
@@ -223,10 +220,10 @@ async fn test_fingerprint_respects_whitelist() {
 #[tokio::test]
 async fn test_fingerprint_blacklist_override() {
     let config = FingerprintConfig::new(
-        50,  // Lower deny threshold for testing
+        50, // Lower deny threshold for testing
         40,
         vec![],
-        vec!["badbot".to_string()],  // blacklist
+        vec!["badbot".to_string()], // blacklist
         false,
         true,
     );
@@ -256,12 +253,12 @@ async fn test_fingerprint_blacklist_override() {
 #[tokio::test]
 async fn test_fingerprint_missing_headers() {
     let config = FingerprintConfig::new(
-        15,  // Very low deny threshold to trigger on missing headers
+        15, // Very low deny threshold to trigger on missing headers
         10,
         vec![],
         vec![],
         false,
-        true,  // require_common_headers
+        true, // require_common_headers
     );
     let filter = FingerprintFilter::new(config);
     let chain = Arc::new(FilterChain::new().add_filter(Arc::new(filter)));
@@ -270,7 +267,7 @@ async fn test_fingerprint_missing_headers() {
 
     let client: Client<HttpConnector, Full<Bytes>> =
         Client::builder(hyper_util::rt::TokioExecutor::new()).build_http();
-    
+
     let req = Request::builder()
         .uri(format!("http://{}/test", addr))
         .body(Full::new(Bytes::new()))
@@ -285,7 +282,7 @@ async fn test_fingerprint_missing_headers() {
 #[tokio::test]
 async fn test_fingerprint_combined_with_rate_limit() {
     let fingerprint_config = FingerprintConfig::new(
-        50,  // Lower deny threshold for testing
+        50, // Lower deny threshold for testing
         40,
         vec![],
         vec![],
@@ -293,21 +290,21 @@ async fn test_fingerprint_combined_with_rate_limit() {
         true,
     );
     let fingerprint_filter = FingerprintFilter::new(fingerprint_config);
-    
+
     let rate_limit_config = RateLimitConfig::new(10, 5);
     let rate_limit_filter = RateLimitFilter::with_in_memory(rate_limit_config);
-    
+
     let chain = Arc::new(
         FilterChain::new()
             .add_filter(Arc::new(fingerprint_filter))
-            .add_filter(Arc::new(rate_limit_filter))
+            .add_filter(Arc::new(rate_limit_filter)),
     );
 
     let (addr, server_handle) = run_test_server(chain).await;
 
     let client: Client<HttpConnector, Full<Bytes>> =
         Client::builder(hyper_util::rt::TokioExecutor::new()).build_http();
-    
+
     let req = Request::builder()
         .uri(format!("http://{}/test", addr))
         .header("User-Agent", "curl/7.64.1")
@@ -316,7 +313,7 @@ async fn test_fingerprint_combined_with_rate_limit() {
 
     let response = client.request(req).await.unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    
+
     for _ in 0..5 {
         let req = Request::builder()
             .uri(format!("http://{}/test", addr))
@@ -337,7 +334,7 @@ async fn test_fingerprint_combined_with_rate_limit() {
 #[tokio::test]
 async fn test_fingerprint_disabled() {
     let config = FingerprintConfig::new(
-        100,  // Maximum threshold (nothing gets denied)
+        100, // Maximum threshold (nothing gets denied)
         100,
         vec![],
         vec![],
@@ -351,7 +348,7 @@ async fn test_fingerprint_disabled() {
 
     let client: Client<HttpConnector, Full<Bytes>> =
         Client::builder(hyper_util::rt::TokioExecutor::new()).build_http();
-    
+
     let req = Request::builder()
         .uri(format!("http://{}/test", addr))
         .header("User-Agent", "curl/7.64.1")
@@ -367,7 +364,7 @@ async fn test_fingerprint_disabled() {
 #[tokio::test]
 async fn test_fingerprint_scanner_detection() {
     let config = FingerprintConfig::new(
-        50,  // Lower deny threshold for testing
+        50, // Lower deny threshold for testing
         40,
         vec![],
         vec![],
@@ -381,7 +378,7 @@ async fn test_fingerprint_scanner_detection() {
 
     let client: Client<HttpConnector, Full<Bytes>> =
         Client::builder(hyper_util::rt::TokioExecutor::new()).build_http();
-    
+
     let scanners = vec!["Nikto/2.1.6", "sqlmap/1.0", "masscan/1.0"];
 
     for scanner in scanners {

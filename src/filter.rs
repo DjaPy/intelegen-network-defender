@@ -3,20 +3,20 @@
 //! Provides async trait-based filtering with composable filter chain.
 //! Filters can Allow, Deny, or Challenge requests based on inspection.
 
-pub mod rate_limit;
 pub mod fingerprint;
+pub mod rate_limit;
 
-pub use rate_limit::{RateLimitFilter, RateLimitConfig};
-pub use fingerprint::{FingerprintFilter, FingerprintConfig};
+pub use fingerprint::{FingerprintConfig, FingerprintFilter};
+pub use rate_limit::{RateLimitConfig, RateLimitFilter};
 
 use std::fmt;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use hyper::{Request, Response, StatusCode};
-use hyper::body::Incoming;
 use http_body_util::Full;
 use hyper::body::Bytes;
+use hyper::body::Incoming;
+use hyper::{Request, Response, StatusCode};
 
 /// Action to take after filter inspection
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,11 +61,7 @@ pub trait Filter: Send + Sync {
     /// Inspect request and return action
     ///
     /// Note: Takes &Request to allow inspection without consuming body
-    async fn filter(
-        &self,
-        req: &Request<Incoming>,
-        remote_addr: SocketAddr,
-    ) -> FilterAction;
+    async fn filter(&self, req: &Request<Incoming>, remote_addr: SocketAddr) -> FilterAction;
 
     /// Filter name for logging
     fn name(&self) -> &str;
@@ -84,17 +80,13 @@ impl FilterChain {
             filters: Vec::new(),
         }
     }
-    
+
     pub fn add_filter(mut self, filter: Arc<dyn Filter>) -> Self {
         self.filters.push(filter);
         self
     }
-    
-    pub async fn execute(
-        &self,
-        req: &Request<Incoming>,
-        remote_addr: SocketAddr,
-    ) -> FilterAction {
+
+    pub async fn execute(&self, req: &Request<Incoming>, remote_addr: SocketAddr) -> FilterAction {
         for filter in &self.filters {
             let action = filter.filter(req, remote_addr).await;
             if action != FilterAction::Allow {
@@ -108,18 +100,15 @@ impl FilterChain {
         }
         FilterAction::Allow
     }
-    
+
     pub fn action_to_response(&self, action: FilterAction) -> Response<Full<Bytes>> {
         match action {
-            FilterAction::Allow => {
-                Response::builder()
-                    .status(StatusCode::OK)
-                    .body(Full::new(Bytes::from("OK")))
-                    .unwrap()
-            }
+            FilterAction::Allow => Response::builder()
+                .status(StatusCode::OK)
+                .body(Full::new(Bytes::from("OK")))
+                .unwrap(),
             FilterAction::Deny { status, reason } => {
-                let status_code = StatusCode::from_u16(status)
-                    .unwrap_or(StatusCode::FORBIDDEN);
+                let status_code = StatusCode::from_u16(status).unwrap_or(StatusCode::FORBIDDEN);
                 Response::builder()
                     .status(status_code)
                     .header("Content-Type", "text/plain")
@@ -156,11 +145,7 @@ pub struct PassthroughFilter;
 
 #[async_trait::async_trait]
 impl Filter for PassthroughFilter {
-    async fn filter(
-        &self,
-        _req: &Request<Incoming>,
-        _remote_addr: SocketAddr,
-    ) -> FilterAction {
+    async fn filter(&self, _req: &Request<Incoming>, _remote_addr: SocketAddr) -> FilterAction {
         FilterAction::Allow
     }
 
