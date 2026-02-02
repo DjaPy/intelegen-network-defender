@@ -1,0 +1,32 @@
+# Clippy configuration for Intellegen HTTP Defender
+
+# Allow cognitive complexity up to this threshold
+cognitive-complexity-threshold = 15
+
+# Warn on missing documentation
+# (currently disabled until full documentation is added)
+# missing-docs-in-crate-items = true
+
+# Disallow unsafe code (we don't use it)
+disallowed-methods = []
+
+# Type complexity threshold
+type-complexity-threshold = 250
+
+# Maximum number of lines for a function
+too-many-lines-threshold = 100
+
+# Maximum number of arguments for a function
+too-many-arguments-threshold = 7
+
+# Enable pedantic lints for better code quality
+# (can be enabled selectively via cargo clippy -- -W clippy::pedantic)
+
+# Array size threshold for passing by reference instead of value
+trivial-copy-size-limit = 128
+
+# Minimum number of items for enum variants to trigger large_enum_variant
+enum-variant-size-threshold = 200
+
+# Allow common acronyms in uppercase
+upper-case-acronyms-aggressive = false

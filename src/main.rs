@@ -13,6 +13,9 @@ use intellegen_http_defender::server::{ConnectionTracker, ConnectionTrackerConfi
 use tracing::{Level, info};
 use tracing_subscriber::FmtSubscriber;
 
+#[cfg(feature = "redis-storage")]
+use intellegen_http_defender::storage::SharedRedisClient;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     FmtSubscriber::builder()
@@ -48,6 +51,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .parse()
         .map_err(|e| format!("Invalid server address: {}", e))?;
 
+    // Create shared Redis client if either rate limiting or Slowloris uses Redis
+    #[cfg(feature = "redis-storage")]
+    let shared_redis_client = {
+        let needs_redis = matches!(config.rate_limit.storage, StorageType::Redis)
+            || matches!(config.slowloris.storage, StorageType::Redis);
+
+        if needs_redis {
+            let redis_url = config
+                .rate_limit
+                .redis_url
+                .as_ref()
+                .or(config.slowloris.redis_url.as_ref())
+                .expect("Redis URL required when using Redis storage");
+            info!("Creating shared Redis client: {}", redis_url);
+            Some(SharedRedisClient::new(redis_url)?)
+        } else {
+            None
+        }
+    };
+
     let mut filter_chain = FilterChain::new();
 
     if config.fingerprint.enabled {
@@ -78,13 +101,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             #[cfg(feature = "redis-storage")]
             StorageType::Redis => {
                 use intellegen_http_defender::filter::rate_limit::RedisStorage;
-                let redis_url = config
-                    .rate_limit
-                    .redis_url
-                    .as_ref()
-                    .expect("Redis URL required for Redis storage");
-                info!("Using Redis rate limiting storage: {}", redis_url);
-                let storage = RedisStorage::new(redis_url)?;
+                info!("Using Redis rate limiting storage (shared client)");
+                let storage = RedisStorage::from_client(
+                    shared_redis_client
+                        .as_ref()
+                        .expect("Shared Redis client should be initialized")
+                        .clone(),
+                );
                 RateLimitFilter::new(rate_limit_config, Arc::new(storage))
             }
         };
@@ -115,13 +138,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             #[cfg(feature = "redis-storage")]
             StorageType::Redis => {
                 use intellegen_http_defender::server::connection_tracker::RedisConnectionStorage;
-                let redis_url = config
-                    .slowloris
-                    .redis_url
-                    .as_ref()
-                    .expect("Redis URL required for Redis storage");
-                info!("Using Redis connection tracking storage: {}", redis_url);
-                let storage = RedisConnectionStorage::new(redis_url)?;
+                info!("Using Redis connection tracking storage (shared client)");
+                let storage = RedisConnectionStorage::from_client(
+                    shared_redis_client
+                        .as_ref()
+                        .expect("Shared Redis client should be initialized")
+                        .clone(),
+                );
                 ConnectionTracker::new(tracker_config, Arc::new(storage))
             }
         }

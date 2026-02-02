@@ -11,3 +11,4 @@ pub mod error;
 pub mod filter;
 pub mod proxy;
 pub mod server;
+pub mod storage;

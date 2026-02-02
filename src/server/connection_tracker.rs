@@ -11,14 +11,10 @@ use dashmap::DashMap;
 #[cfg(feature = "redis-storage")]
 use redis::AsyncCommands;
 
-/// Error type for connection storage operations
-#[derive(Debug, thiserror::Error)]
-pub enum StorageError {
-    #[error("Redis error: {0}")]
-    Redis(String),
-}
+use crate::storage::Result;
 
-type Result<T> = std::result::Result<T, StorageError>;
+#[cfg(feature = "redis-storage")]
+use crate::storage::{SharedRedisClient, StorageError};
 
 /// Connection metadata for tracking connection state
 #[derive(Debug, Clone)]
@@ -157,12 +153,14 @@ pub struct RedisConnectionStorage {
 #[cfg(feature = "redis-storage")]
 impl RedisConnectionStorage {
     pub fn new(redis_url: &str) -> Result<Self> {
-        let client =
-            redis::Client::open(redis_url).map_err(|e| StorageError::Redis(e.to_string()))?;
+        let shared_client = SharedRedisClient::new(redis_url)?;
+        Ok(Self::from_client(shared_client))
+    }
 
-        Ok(Self {
-            client: Arc::new(client),
-        })
+    pub fn from_client(shared_client: SharedRedisClient) -> Self {
+        Self {
+            client: shared_client.client().clone(),
+        }
     }
 
     fn connections_key(ip: IpAddr) -> String {
