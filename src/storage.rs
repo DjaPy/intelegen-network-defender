@@ -25,8 +25,8 @@ pub struct SharedRedisClient {
 #[cfg(feature = "redis-storage")]
 impl SharedRedisClient {
     pub fn new(redis_url: &str) -> Result<Self> {
-        let client = RedisClient::open(redis_url)
-            .map_err(|e| StorageError::Redis(e.to_string()))?;
+        let client =
+            RedisClient::open(redis_url).map_err(|e| StorageError::Redis(e.to_string()))?;
 
         Ok(Self {
             client: Arc::new(client),
