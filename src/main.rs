@@ -9,9 +9,12 @@ use intellegen_http_defender::filter::{
     FilterChain, FingerprintFilter, PassthroughFilter, RateLimitFilter,
 };
 use intellegen_http_defender::proxy::{ProxyClient, ProxyConfig as ProxyClientConfig};
-use intellegen_http_defender::server::Server;
+use intellegen_http_defender::server::{ConnectionTracker, ConnectionTrackerConfig, Server};
 use tracing::{Level, info};
 use tracing_subscriber::FmtSubscriber;
+
+#[cfg(feature = "redis-storage")]
+use intellegen_http_defender::storage::SharedRedisClient;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -37,10 +40,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         config.rate_limit.requests_per_second,
         config.rate_limit.burst_capacity
     );
+    info!(
+        "Slowloris protection: enabled={}, max_connections={}, connection_rate={}",
+        config.slowloris.enabled,
+        config.slowloris.max_connections_per_ip,
+        config.slowloris.connection_rate_per_sec
+    );
 
     let addr: SocketAddr = format!("{}:{}", config.server.host, config.server.port)
         .parse()
         .map_err(|e| format!("Invalid server address: {}", e))?;
+
+    // Create shared Redis client if either rate limiting or Slowloris uses Redis
+    #[cfg(feature = "redis-storage")]
+    let shared_redis_client = {
+        let needs_redis = matches!(config.rate_limit.storage, StorageType::Redis)
+            || matches!(config.slowloris.storage, StorageType::Redis);
+
+        if needs_redis {
+            let redis_url = config
+                .rate_limit
+                .redis_url
+                .as_ref()
+                .or(config.slowloris.redis_url.as_ref())
+                .expect("Redis URL required when using Redis storage");
+            info!("Creating shared Redis client: {}", redis_url);
+            Some(SharedRedisClient::new(redis_url)?)
+        } else {
+            None
+        }
+    };
 
     let mut filter_chain = FilterChain::new();
 
@@ -72,13 +101,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             #[cfg(feature = "redis-storage")]
             StorageType::Redis => {
                 use intellegen_http_defender::filter::rate_limit::RedisStorage;
-                let redis_url = config
-                    .rate_limit
-                    .redis_url
-                    .as_ref()
-                    .expect("Redis URL required for Redis storage");
-                info!("Using Redis rate limiting storage: {}", redis_url);
-                let storage = RedisStorage::new(redis_url)?;
+                info!("Using Redis rate limiting storage (shared client)");
+                let storage = RedisStorage::from_client(
+                    shared_redis_client
+                        .as_ref()
+                        .expect("Shared Redis client should be initialized")
+                        .clone(),
+                );
                 RateLimitFilter::new(rate_limit_config, Arc::new(storage))
             }
         };
@@ -93,7 +122,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .with_preserve_host(config.proxy.preserve_host);
 
     let proxy_client = ProxyClient::new(proxy_config)?;
-    let server = Server::bind(addr, filter_chain, proxy_client).await?;
+
+    let connection_tracker = if config.slowloris.enabled {
+        let tracker_config = ConnectionTrackerConfig::new(
+            config.slowloris.max_connections_per_ip,
+            config.slowloris.connection_rate_per_sec,
+            config.slowloris.idle_timeout_secs,
+        );
+
+        match config.slowloris.storage {
+            StorageType::Memory => {
+                info!("Using in-memory connection tracking storage");
+                ConnectionTracker::with_in_memory(tracker_config)
+            }
+            #[cfg(feature = "redis-storage")]
+            StorageType::Redis => {
+                use intellegen_http_defender::server::connection_tracker::RedisConnectionStorage;
+                info!("Using Redis connection tracking storage (shared client)");
+                let storage = RedisConnectionStorage::from_client(
+                    shared_redis_client
+                        .as_ref()
+                        .expect("Shared Redis client should be initialized")
+                        .clone(),
+                );
+                ConnectionTracker::new(tracker_config, Arc::new(storage))
+            }
+        }
+    } else {
+        info!("Slowloris protection disabled");
+        ConnectionTracker::with_in_memory(ConnectionTrackerConfig::new(u32::MAX, 0, u64::MAX))
+    };
+
+    let server = Server::bind(
+        addr,
+        filter_chain,
+        proxy_client,
+        connection_tracker,
+        config.slowloris.clone(),
+    )
+    .await?;
 
     info!("Server listening on {}", server.addr());
 

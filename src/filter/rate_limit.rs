@@ -14,15 +14,10 @@ use hyper::body::Incoming;
 use redis::AsyncCommands;
 
 use super::{ChallengeType, Filter, FilterAction};
+use crate::storage::Result;
 
-/// Error type for rate limit storage operations
-#[derive(Debug, thiserror::Error)]
-pub enum StorageError {
-    #[error("Redis error: {0}")]
-    Redis(String),
-}
-
-type Result<T> = std::result::Result<T, StorageError>;
+#[cfg(feature = "redis-storage")]
+use crate::storage::{SharedRedisClient, StorageError};
 
 /// Trait for rate limit storage backends
 #[async_trait::async_trait]
@@ -90,12 +85,14 @@ pub struct RedisStorage {
 #[cfg(feature = "redis-storage")]
 impl RedisStorage {
     pub fn new(redis_url: &str) -> Result<Self> {
-        let client =
-            redis::Client::open(redis_url).map_err(|e| StorageError::Redis(e.to_string()))?;
+        let shared_client = SharedRedisClient::new(redis_url)?;
+        Ok(Self::from_client(shared_client))
+    }
 
-        Ok(Self {
-            client: Arc::new(client),
-        })
+    pub fn from_client(shared_client: SharedRedisClient) -> Self {
+        Self {
+            client: shared_client.client().clone(),
+        }
     }
 
     fn redis_key(key: &str) -> String {
