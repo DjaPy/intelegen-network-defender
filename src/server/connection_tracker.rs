@@ -200,7 +200,9 @@ impl ConnectionStorage for RedisConnectionStorage {
             .await
             .map_err(|e| StorageError::Redis(e.to_string()))?;
 
-        if let Some(count) = active_connections && count >= max_connections {
+        if let Some(count) = active_connections
+            && count >= max_connections
+        {
             return Ok(false);
         }
 
@@ -328,24 +330,25 @@ impl ConnectionStorage for RedisConnectionStorage {
                 let idle_time = now_nanos.saturating_sub(last_nanos);
 
                 if idle_time > idle_timeout_nanos
-                && let Some(ip_str) = activity_key.strip_prefix("slowloris:activity:")
-                && let Ok(ip) = ip_str.parse::<IpAddr>() {
-                        let connections_key = Self::connections_key(ip);
-                        let last_conn_key = Self::last_conn_key(ip);
+                    && let Some(ip_str) = activity_key.strip_prefix("slowloris:activity:")
+                    && let Ok(ip) = ip_str.parse::<IpAddr>()
+                {
+                    let connections_key = Self::connections_key(ip);
+                    let last_conn_key = Self::last_conn_key(ip);
 
-                        let active: Option<u32> = conn
-                            .get(&connections_key)
+                    let active: Option<u32> = conn
+                        .get(&connections_key)
+                        .await
+                        .map_err(|e| StorageError::Redis(e.to_string()))?;
+
+                    if active.unwrap_or(0) == 0 {
+                        let _: () = conn
+                            .del(&[&connections_key, &last_conn_key, &activity_key])
                             .await
                             .map_err(|e| StorageError::Redis(e.to_string()))?;
-
-                        if active.unwrap_or(0) == 0 {
-                            let _: () = conn
-                                .del(&[&connections_key, &last_conn_key, &activity_key])
-                                .await
-                                .map_err(|e| StorageError::Redis(e.to_string()))?;
-                            cleaned += 1;
-                        }
+                        cleaned += 1;
                     }
+                }
             }
         }
 
