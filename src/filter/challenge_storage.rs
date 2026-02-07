@@ -45,7 +45,8 @@ impl ChallengeStorage for InMemoryChallengeStorage {
     async fn mark_completed(&self, session_token: &str, ip: &str, expiry_secs: u64) -> Result<()> {
         let now = Self::now();
         let expiry = now + expiry_secs;
-        self.sessions.insert(session_token.to_string(), (ip.to_string(), expiry));
+        self.sessions
+            .insert(session_token.to_string(), (ip.to_string(), expiry));
         Ok(())
     }
 

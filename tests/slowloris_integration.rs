@@ -59,34 +59,6 @@ async fn run_test_backend() -> (SocketAddr, tokio::task::JoinHandle<()>) {
     (addr, handle)
 }
 
-/// Helper to setup test server with given configuration
-async fn setup_test_server(
-    backend_addr: SocketAddr,
-    filter_chain: FilterChain,
-    connection_tracker: ConnectionTracker,
-    slowloris_config: SlowlorisConfig,
-) -> SocketAddr {
-    let proxy_config = ProxyConfig::new(format!("http://{}", backend_addr));
-    let proxy_client = ProxyClient::new(proxy_config).unwrap();
-
-    let proxy_addr = SocketAddr::from(([127, 0, 0, 1], 0));
-    let server = Server::bind(
-        proxy_addr,
-        filter_chain,
-        proxy_client,
-        connection_tracker,
-        slowloris_config,
-        None,
-    )
-    .await
-    .unwrap();
-    let proxy_addr = server.addr();
-
-    tokio::spawn(async move { server.run().await });
-
-    proxy_addr
-}
-
 #[tokio::test]
 async fn test_slowloris_allows_normal_connections() {
     let (backend_addr, _backend_handle) = run_test_backend().await;

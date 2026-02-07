@@ -4,7 +4,7 @@ use std::sync::Arc;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
 use hyper::{Request, Response, StatusCode};
-use serde::{Deserialize};
+use serde::Deserialize;
 
 use crate::filter::challenge::{Challenge, ProofOfWorkConfig};
 use crate::filter::challenge_storage::ChallengeStorage;
@@ -125,8 +125,8 @@ fn error_response(status: StatusCode, message: &str) -> Response<Full<Bytes>> {
 }
 
 fn generate_session_token() -> String {
-    use base64::engine::general_purpose;
     use base64::Engine;
+    use base64::engine::general_purpose;
     use rand::RngCore;
 
     let mut rng = rand::thread_rng();

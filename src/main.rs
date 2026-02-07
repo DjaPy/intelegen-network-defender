@@ -4,11 +4,11 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use intellegen_http_defender::config::{Config, StorageType};
+use intellegen_http_defender::filter::RateLimitConfig;
 use intellegen_http_defender::filter::challenge::{ProofOfWorkConfig, ProofOfWorkFilter};
 use intellegen_http_defender::filter::challenge_storage::{
     ChallengeStorage, InMemoryChallengeStorage,
 };
-use intellegen_http_defender::filter::RateLimitConfig;
 use intellegen_http_defender::filter::{
     FilterChain, FingerprintFilter, PassthroughFilter, RateLimitFilter,
 };
@@ -16,7 +16,7 @@ use intellegen_http_defender::proxy::{ProxyClient, ProxyConfig as ProxyClientCon
 use intellegen_http_defender::server::{
     ChallengeHandler, ConnectionTracker, ConnectionTrackerConfig, Server,
 };
-use tracing::{info, Level};
+use tracing::{Level, info};
 use tracing_subscriber::FmtSubscriber;
 
 #[cfg(feature = "redis-storage")]
@@ -56,9 +56,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     );
     info!(
         "Challenge-response: enabled={}, difficulty={}, timeout={}s",
-        config.challenge.enabled,
-        config.challenge.difficulty,
-        config.challenge.timeout_secs
+        config.challenge.enabled, config.challenge.difficulty, config.challenge.timeout_secs
     );
 
     let addr: SocketAddr = format!("{}:{}", config.server.host, config.server.port)

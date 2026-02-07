@@ -15,6 +15,10 @@ services:
       - RATE_LIMIT_REQUESTS_PER_SECOND=100
       - RATE_LIMIT_BURST_CAPACITY=10
       - RATE_LIMIT_STORAGE=redis
+      - CHALLENGE_ENABLED=true
+      - CHALLENGE_DIFFICULTY=20
+      - CHALLENGE_STORAGE=redis
+      - SLOWLORIS_STORAGE=redis
       - REDIS_URL=redis://redis:6379
       - RUST_LOG=info
     depends_on:
@@ -34,6 +38,11 @@ services:
     networks:
       - defender-net
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   backend:
     image: nginx:alpine

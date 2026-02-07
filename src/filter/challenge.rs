@@ -2,15 +2,15 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use base64::engine::general_purpose;
 use base64::Engine;
-use hyper::body::Incoming;
+use base64::engine::general_purpose;
 use hyper::Request;
+use hyper::body::Incoming;
 use rand::Rng;
 use sha2::{Digest, Sha256};
 
-use super::{ChallengeType, Filter, FilterAction};
 use super::challenge_storage::ChallengeStorage;
+use super::{ChallengeType, Filter, FilterAction};
 
 #[derive(Debug, Clone)]
 pub struct Challenge {
@@ -63,7 +63,11 @@ impl Challenge {
         let difficulty = *data.last().unwrap();
         let random_bytes = data[8..data.len() - 1].to_vec();
 
-        let id = format!("{}-{}", timestamp, hex::encode(&random_bytes[..8.min(random_bytes.len())]));
+        let id = format!(
+            "{}-{}",
+            timestamp,
+            hex::encode(&random_bytes[..8.min(random_bytes.len())])
+        );
 
         Ok(Self {
             id,
@@ -85,7 +89,7 @@ impl Challenge {
     pub fn verify(&self, nonce: u64) -> bool {
         let mut hasher = Sha256::new();
         hasher.update(self.encode().as_bytes());
-        hasher.update(&nonce.to_be_bytes());
+        hasher.update(nonce.to_be_bytes());
 
         let result = hasher.finalize();
         count_leading_zero_bits(&result) >= self.difficulty as usize
@@ -138,17 +142,16 @@ impl ProofOfWorkFilter {
     }
 
     async fn has_valid_session(&self, req: &Request<Incoming>) -> bool {
-        if let Some(cookie_header) = req.headers().get("cookie") {
-            if let Ok(cookie_str) = cookie_header.to_str() {
-                for cookie in cookie_str.split(';') {
-                    let cookie = cookie.trim();
-                    if let Some(value) = cookie.strip_prefix("armor_session=") {
-                        if let Ok(valid) = self.storage.verify_session(value).await {
-                            if valid {
-                                return true;
-                            }
-                        }
-                    }
+        if let Some(cookie_header) = req.headers().get("cookie")
+            && let Ok(cookie_str) = cookie_header.to_str()
+        {
+            for cookie in cookie_str.split(';') {
+                let cookie = cookie.trim();
+                if let Some(value) = cookie.strip_prefix("armor_session=")
+                    && let Ok(valid) = self.storage.verify_session(value).await
+                    && valid
+                {
+                    return true;
                 }
             }
         }

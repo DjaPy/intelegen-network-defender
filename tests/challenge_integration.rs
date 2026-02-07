@@ -12,11 +12,19 @@ use serde_json::json;
 use tokio::net::TcpListener;
 
 use intellegen_http_defender::config::SlowlorisConfig;
-use intellegen_http_defender::filter::challenge::{Challenge, ProofOfWorkConfig, ProofOfWorkFilter};
-use intellegen_http_defender::filter::challenge_storage::{ChallengeStorage, InMemoryChallengeStorage};
-use intellegen_http_defender::filter::{FilterChain, PassthroughFilter, RateLimitConfig, RateLimitFilter};
+use intellegen_http_defender::filter::challenge::{
+    Challenge, ProofOfWorkConfig, ProofOfWorkFilter,
+};
+use intellegen_http_defender::filter::challenge_storage::{
+    ChallengeStorage, InMemoryChallengeStorage,
+};
+use intellegen_http_defender::filter::{
+    FilterChain, PassthroughFilter, RateLimitConfig, RateLimitFilter,
+};
 use intellegen_http_defender::proxy::{ProxyClient, ProxyConfig};
-use intellegen_http_defender::server::{ChallengeHandler, ConnectionTracker, ConnectionTrackerConfig, Server};
+use intellegen_http_defender::server::{
+    ChallengeHandler, ConnectionTracker, ConnectionTrackerConfig, Server,
+};
 
 /// Helper function to create disabled Slowloris config for tests
 fn disabled_slowloris_config() -> SlowlorisConfig {
@@ -203,10 +211,10 @@ async fn test_verify_challenge_success() {
     let body = response.collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let challenge_str = json["challenge"].as_str().unwrap();
-    
+
     let challenge = Challenge::decode(challenge_str).unwrap();
     let nonce = solve_challenge_sync(&challenge);
-    
+
     let verify_body = json!({
         "challenge": challenge_str,
         "nonce": nonce.to_string()
@@ -239,7 +247,7 @@ async fn test_verify_challenge_expired() {
 
     let client: Client<HttpConnector, Full<Bytes>> =
         Client::builder(hyper_util::rt::TokioExecutor::new()).build_http();
-    
+
     let req = hyper::Request::builder()
         .uri(format!("http://{}/test", proxy_addr))
         .header("Accept", "application/json")
@@ -250,12 +258,12 @@ async fn test_verify_challenge_expired() {
     let body = response.collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let challenge_str = json["challenge"].as_str().unwrap();
-    
+
     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-    
+
     let challenge = Challenge::decode(challenge_str).unwrap();
     let nonce = solve_challenge_sync(&challenge);
-    
+
     let verify_body = json!({
         "challenge": challenge_str,
         "nonce": nonce.to_string()
@@ -288,7 +296,7 @@ async fn test_verify_challenge_invalid_nonce() {
 
     let client: Client<HttpConnector, Full<Bytes>> =
         Client::builder(hyper_util::rt::TokioExecutor::new()).build_http();
-    
+
     let req = hyper::Request::builder()
         .uri(format!("http://{}/test", proxy_addr))
         .header("Accept", "application/json")
@@ -299,7 +307,7 @@ async fn test_verify_challenge_invalid_nonce() {
     let body = response.collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let challenge_str = json["challenge"].as_str().unwrap();
-    
+
     let verify_body = json!({
         "challenge": challenge_str,
         "nonce": "123456"
@@ -332,7 +340,7 @@ async fn test_session_cookie_allows_bypass() {
 
     let client: Client<HttpConnector, Full<Bytes>> =
         Client::builder(hyper_util::rt::TokioExecutor::new()).build_http();
-    
+
     let req = hyper::Request::builder()
         .uri(format!("http://{}/test", proxy_addr))
         .header("Accept", "application/json")
@@ -346,7 +354,7 @@ async fn test_session_cookie_allows_bypass() {
 
     let challenge = Challenge::decode(challenge_str).unwrap();
     let nonce = solve_challenge_sync(&challenge);
-    
+
     let verify_body = json!({
         "challenge": challenge_str,
         "nonce": nonce.to_string()
@@ -363,7 +371,7 @@ async fn test_session_cookie_allows_bypass() {
     let body = response.collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let session_token = json["session_token"].as_str().unwrap();
-    
+
     let req = hyper::Request::builder()
         .uri(format!("http://{}/test", proxy_addr))
         .header("Cookie", format!("armor_session={}", session_token))
@@ -389,7 +397,7 @@ async fn test_verify_endpoint_protected_by_rate_limit() {
 
     let client: Client<HttpConnector, Full<Bytes>> =
         Client::builder(hyper_util::rt::TokioExecutor::new()).build_http();
-    
+
     let req = hyper::Request::builder()
         .uri(format!("http://{}/test", proxy_addr))
         .header("Accept", "application/json")
@@ -408,7 +416,7 @@ async fn test_verify_endpoint_protected_by_rate_limit() {
         "challenge": challenge_str,
         "nonce": nonce.to_string()
     });
-    
+
     for i in 0..5 {
         let req = hyper::Request::builder()
             .uri(format!("http://{}/verify-challenge", proxy_addr))
@@ -488,7 +496,8 @@ async fn test_redis_storage_integration() {
     use intellegen_http_defender::filter::challenge_storage::RedisChallengeStorage;
     use intellegen_http_defender::storage::SharedRedisClient;
 
-    let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+    let redis_url =
+        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
     let redis_client = match SharedRedisClient::new(&redis_url) {
         Ok(client) => client,
         Err(_) => {
@@ -504,7 +513,7 @@ async fn test_redis_storage_integration() {
 
     let client: Client<HttpConnector, Full<Bytes>> =
         Client::builder(hyper_util::rt::TokioExecutor::new()).build_http();
-    
+
     let req = hyper::Request::builder()
         .uri(format!("http://{}/test", proxy_addr))
         .header("Accept", "application/json")
@@ -518,7 +527,7 @@ async fn test_redis_storage_integration() {
 
     let challenge = Challenge::decode(challenge_str).unwrap();
     let nonce = solve_challenge_sync(&challenge);
-    
+
     let verify_body = json!({
         "challenge": challenge_str,
         "nonce": nonce.to_string()

@@ -45,10 +45,7 @@ pub enum ChallengeType {
     /// Custom challenge (future: CAPTCHA, PoW)
     Custom(String),
     /// Proof-of-Work challenge
-    ProofOfWork {
-        challenge: String,
-        difficulty: u8,
-    },
+    ProofOfWork { challenge: String, difficulty: u8 },
 }
 
 impl fmt::Display for FilterAction {
@@ -114,7 +111,11 @@ impl FilterChain {
         FilterAction::Allow
     }
 
-    pub fn action_to_response(&self, action: FilterAction, headers: &HeaderMap) -> Response<Full<Bytes>> {
+    pub fn action_to_response(
+        &self,
+        action: FilterAction,
+        headers: &HeaderMap,
+    ) -> Response<Full<Bytes>> {
         match action {
             FilterAction::Allow => Response::builder()
                 .status(StatusCode::OK)
@@ -144,7 +145,11 @@ impl FilterChain {
                 .body(Full::new(Bytes::from(msg)))
                 .unwrap(),
             FilterAction::Challenge {
-                challenge_type: ChallengeType::ProofOfWork { challenge, difficulty },
+                challenge_type:
+                    ChallengeType::ProofOfWork {
+                        challenge,
+                        difficulty,
+                    },
             } => {
                 let accept_html = headers
                     .get("accept")
