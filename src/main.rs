@@ -5,14 +5,22 @@ use std::sync::Arc;
 
 use intellegen_http_defender::config::{Config, StorageType};
 use intellegen_http_defender::filter::RateLimitConfig;
+use intellegen_http_defender::filter::challenge::{ProofOfWorkConfig, ProofOfWorkFilter};
+use intellegen_http_defender::filter::challenge_storage::{
+    ChallengeStorage, InMemoryChallengeStorage,
+};
 use intellegen_http_defender::filter::{
     FilterChain, FingerprintFilter, PassthroughFilter, RateLimitFilter,
 };
 use intellegen_http_defender::proxy::{ProxyClient, ProxyConfig as ProxyClientConfig};
-use intellegen_http_defender::server::{ConnectionTracker, ConnectionTrackerConfig, Server};
+use intellegen_http_defender::server::{
+    ChallengeHandler, ConnectionTracker, ConnectionTrackerConfig, Server,
+};
 use tracing::{Level, info};
 use tracing_subscriber::FmtSubscriber;
 
+#[cfg(feature = "redis-storage")]
+use intellegen_http_defender::filter::challenge_storage::RedisChallengeStorage;
 #[cfg(feature = "redis-storage")]
 use intellegen_http_defender::storage::SharedRedisClient;
 
@@ -46,16 +54,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         config.slowloris.max_connections_per_ip,
         config.slowloris.connection_rate_per_sec
     );
+    info!(
+        "Challenge-response: enabled={}, difficulty={}, timeout={}s",
+        config.challenge.enabled, config.challenge.difficulty, config.challenge.timeout_secs
+    );
 
     let addr: SocketAddr = format!("{}:{}", config.server.host, config.server.port)
         .parse()
         .map_err(|e| format!("Invalid server address: {}", e))?;
 
-    // Create shared Redis client if either rate limiting or Slowloris uses Redis
+    // Create shared Redis client if rate limiting, Slowloris, or challenge uses Redis
     #[cfg(feature = "redis-storage")]
     let shared_redis_client = {
         let needs_redis = matches!(config.rate_limit.storage, StorageType::Redis)
-            || matches!(config.slowloris.storage, StorageType::Redis);
+            || matches!(config.slowloris.storage, StorageType::Redis)
+            || matches!(config.challenge.storage, StorageType::Redis);
 
         if needs_redis {
             let redis_url = config
@@ -63,6 +76,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .redis_url
                 .as_ref()
                 .or(config.slowloris.redis_url.as_ref())
+                .or(config.challenge.redis_url.as_ref())
                 .expect("Redis URL required when using Redis storage");
             info!("Creating shared Redis client: {}", redis_url);
             Some(SharedRedisClient::new(redis_url)?)
@@ -86,6 +100,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let filter = FingerprintFilter::new(fingerprint_config);
         filter_chain = filter_chain.add_filter(Arc::new(filter));
     }
+
+    // Challenge-response filter and handler
+    let challenge_handler = if config.challenge.enabled {
+        info!(
+            "Challenge-response enabled: difficulty={}, timeout={}s, session_duration={}s",
+            config.challenge.difficulty,
+            config.challenge.timeout_secs,
+            config.challenge.session_duration_secs
+        );
+
+        let challenge_storage: Arc<dyn ChallengeStorage> = match config.challenge.storage {
+            StorageType::Memory => {
+                info!("Using in-memory challenge storage");
+                Arc::new(InMemoryChallengeStorage::new())
+            }
+            #[cfg(feature = "redis-storage")]
+            StorageType::Redis => {
+                info!("Using Redis challenge storage (shared client)");
+                Arc::new(RedisChallengeStorage::from_client(
+                    shared_redis_client
+                        .as_ref()
+                        .expect("Shared Redis client should be initialized")
+                        .clone(),
+                ))
+            }
+        };
+
+        let pow_config = ProofOfWorkConfig::new(
+            config.challenge.difficulty,
+            config.challenge.timeout_secs,
+            config.challenge.session_duration_secs,
+        );
+
+        let filter = ProofOfWorkFilter::new(pow_config.clone(), challenge_storage.clone());
+        filter_chain = filter_chain.add_filter(Arc::new(filter));
+
+        let handler = ChallengeHandler::new(pow_config, challenge_storage);
+        Some(handler)
+    } else {
+        None
+    };
 
     if config.rate_limit.enabled {
         let rate_limit_config = RateLimitConfig::new(
@@ -159,6 +214,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         proxy_client,
         connection_tracker,
         config.slowloris.clone(),
+        challenge_handler,
     )
     .await?;
 

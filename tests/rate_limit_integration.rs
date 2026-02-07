@@ -50,6 +50,7 @@ async fn handle_request(
     chain: Arc<FilterChain>,
     remote_addr: SocketAddr,
 ) -> Result<Response<Full<Bytes>>, hyper::Error> {
+    let headers = req.headers().clone();
     let action = chain.execute(&req, remote_addr).await;
 
     let response = match action {
@@ -57,7 +58,7 @@ async fn handle_request(
             .status(StatusCode::OK)
             .body(Full::new(Bytes::from("OK")))
             .unwrap(),
-        other => chain.action_to_response(other),
+        other => chain.action_to_response(other, &headers),
     };
 
     Ok(response)

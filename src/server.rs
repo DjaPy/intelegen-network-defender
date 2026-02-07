@@ -7,6 +7,7 @@
 //! - Filter chain execution
 //! - Graceful shutdown support
 
+pub mod challenge_handler;
 pub mod connection_tracker;
 
 use std::net::SocketAddr;
@@ -17,7 +18,7 @@ use http_body_util::Full;
 use hyper::body::{Bytes, Incoming};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use hyper::{Request, Response, StatusCode};
+use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::{TokioIo, TokioTimer};
 use tokio::net::TcpListener;
 use tracing::{error, info, warn};
@@ -26,6 +27,7 @@ use crate::config::SlowlorisConfig;
 use crate::error::{ArmorError, Result};
 use crate::filter::{FilterAction, FilterChain};
 use crate::proxy::ProxyClient;
+pub use challenge_handler::ChallengeHandler;
 pub use connection_tracker::{ConnectionGuard, ConnectionTracker, ConnectionTrackerConfig};
 
 /// Main server struct with integrated filter chain and proxy
@@ -36,6 +38,7 @@ pub struct Server {
     proxy_client: Arc<ProxyClient>,
     connection_tracker: Arc<ConnectionTracker>,
     slowloris_config: SlowlorisConfig,
+    challenge_handler: Option<Arc<ChallengeHandler>>,
 }
 
 impl Server {
@@ -45,6 +48,7 @@ impl Server {
         proxy_client: ProxyClient,
         connection_tracker: ConnectionTracker,
         slowloris_config: SlowlorisConfig,
+        challenge_handler: Option<ChallengeHandler>,
     ) -> Result<Self> {
         let listener = TcpListener::bind(addr)
             .await
@@ -63,6 +67,7 @@ impl Server {
             proxy_client: Arc::new(proxy_client),
             connection_tracker: Arc::new(connection_tracker),
             slowloris_config,
+            challenge_handler: challenge_handler.map(Arc::new),
         })
     }
 
@@ -111,6 +116,7 @@ impl Server {
             let filter_chain = self.filter_chain.clone();
             let proxy_client = self.proxy_client.clone();
             let tracker = self.connection_tracker.clone();
+            let challenge_handler = self.challenge_handler.clone();
             let header_timeout = Duration::from_secs(self.slowloris_config.header_timeout_secs);
             let request_timeout = Duration::from_secs(self.slowloris_config.request_timeout_secs);
 
@@ -119,10 +125,17 @@ impl Server {
                     let tracker_clone = tracker.clone();
                     let filter_chain_clone = filter_chain.clone();
                     let proxy_client_clone = proxy_client.clone();
+                    let challenge_handler_clone = challenge_handler.clone();
                     async move {
                         tracker_clone.update_activity(ip).await;
-                        handle_request(req, remote_addr, filter_chain_clone, proxy_client_clone)
-                            .await
+                        handle_request(
+                            req,
+                            remote_addr,
+                            filter_chain_clone,
+                            proxy_client_clone,
+                            challenge_handler_clone,
+                        )
+                        .await
                     }
                 });
 
@@ -157,39 +170,66 @@ impl Server {
 ///
 /// Flow:
 /// 1. Execute filter chain
-/// 2. If Allow: forward to upstream backend via proxy
-/// 3. If Deny/Challenge: return filter chain response
+/// 2. If Allow and /verify-challenge: handle challenge verification
+/// 3. If Allow and other path: forward to upstream backend via proxy
+/// 4. If Deny/Challenge: return filter chain response
 async fn handle_request(
     req: Request<Incoming>,
     remote_addr: SocketAddr,
     filter_chain: Arc<FilterChain>,
     proxy_client: Arc<ProxyClient>,
+    challenge_handler: Option<Arc<ChallengeHandler>>,
 ) -> std::result::Result<Response<Full<Bytes>>, hyper::Error> {
     let method = req.method();
     let uri = req.uri();
 
     info!(%remote_addr, %method, %uri, "Request received");
 
-    // Execute filter chain
+    let is_verify_endpoint = uri.path() == "/verify-challenge" && *method == Method::POST;
+    let headers = req.headers().clone();
     let action = filter_chain.execute(&req, remote_addr).await;
 
     let response = match action {
         FilterAction::Allow => {
-            info!(%remote_addr, "Request allowed, forwarding to upstream");
-
-            match proxy_client.forward(req, remote_addr).await {
-                Ok(response) => response,
-                Err(e) => {
-                    error!(%remote_addr, error = %e, "Proxy forward failed");
+            if is_verify_endpoint {
+                if let Some(handler) = challenge_handler {
+                    info!(%remote_addr, "Handling challenge verification");
+                    match handler.handle(req, remote_addr).await {
+                        Ok(response) => response,
+                        Err(e) => {
+                            error!(%remote_addr, error = %e, "Challenge handler failed");
+                            Response::builder()
+                                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                                .header("Content-Type", "text/plain")
+                                .body(Full::new(Bytes::from("Internal Server Error")))
+                                .unwrap()
+                        }
+                    }
+                } else {
+                    warn!(%remote_addr, "Challenge endpoint accessed but handler not configured");
                     Response::builder()
-                        .status(StatusCode::BAD_GATEWAY)
+                        .status(StatusCode::NOT_FOUND)
                         .header("Content-Type", "text/plain")
-                        .body(Full::new(Bytes::from("Bad Gateway")))
+                        .body(Full::new(Bytes::from("Not Found")))
                         .unwrap()
+                }
+            } else {
+                info!(%remote_addr, "Request allowed, forwarding to upstream");
+
+                match proxy_client.forward(req, remote_addr).await {
+                    Ok(response) => response,
+                    Err(e) => {
+                        error!(%remote_addr, error = %e, "Proxy forward failed");
+                        Response::builder()
+                            .status(StatusCode::BAD_GATEWAY)
+                            .header("Content-Type", "text/plain")
+                            .body(Full::new(Bytes::from("Bad Gateway")))
+                            .unwrap()
+                    }
                 }
             }
         }
-        other => filter_chain.action_to_response(other),
+        other => filter_chain.action_to_response(other, &headers),
     };
 
     Ok(response)

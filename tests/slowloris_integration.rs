@@ -78,6 +78,7 @@ async fn test_slowloris_allows_normal_connections() {
         proxy_client,
         connection_tracker,
         enabled_slowloris_config(),
+        None,
     )
     .await
     .unwrap();
@@ -114,6 +115,7 @@ async fn test_slowloris_respects_max_connections() {
         proxy_client,
         connection_tracker,
         enabled_slowloris_config(),
+        None,
     )
     .await
     .unwrap();
@@ -151,6 +153,7 @@ async fn test_slowloris_respects_connection_rate() {
         proxy_client,
         connection_tracker,
         enabled_slowloris_config(),
+        None,
     )
     .await
     .unwrap();
@@ -188,6 +191,7 @@ async fn test_slowloris_different_ips_independent() {
         proxy_client,
         connection_tracker,
         enabled_slowloris_config(),
+        None,
     )
     .await
     .unwrap();
@@ -217,6 +221,7 @@ async fn test_slowloris_connection_guard_cleanup() {
         proxy_client,
         connection_tracker,
         enabled_slowloris_config(),
+        None,
     )
     .await
     .unwrap();
@@ -257,6 +262,7 @@ async fn test_slowloris_disabled_tracker() {
         proxy_client,
         connection_tracker,
         enabled_slowloris_config(),
+        None,
     )
     .await
     .unwrap();
@@ -306,6 +312,7 @@ async fn test_slowloris_get_attack_slow_headers() {
         proxy_client,
         connection_tracker,
         slowloris_config,
+        None,
     )
     .await
     .unwrap();
@@ -366,6 +373,7 @@ async fn test_slowloris_post_attack_slow_body() {
         proxy_client,
         connection_tracker,
         slowloris_config,
+        None,
     )
     .await
     .unwrap();
