@@ -16,6 +16,7 @@ pub struct Config {
     pub rate_limit: RateLimitConfig,
     pub fingerprint: FingerprintConfig,
     pub slowloris: SlowlorisConfig,
+    pub challenge: ChallengeConfig,
 }
 
 /// Server binding configuration
@@ -76,6 +77,17 @@ pub struct SlowlorisConfig {
     pub redis_url: Option<String>,
 }
 
+/// Challenge-response (PoW) settings
+#[derive(Debug, Clone)]
+pub struct ChallengeConfig {
+    pub enabled: bool,
+    pub difficulty: u8,
+    pub timeout_secs: u64,
+    pub session_duration_secs: u64,
+    pub storage: StorageType,
+    pub redis_url: Option<String>,
+}
+
 impl Config {
     /// Load configuration from environment variables
     ///
@@ -90,6 +102,7 @@ impl Config {
             rate_limit: RateLimitConfig::from_env()?,
             fingerprint: FingerprintConfig::from_env()?,
             slowloris: SlowlorisConfig::from_env()?,
+            challenge: ChallengeConfig::from_env()?,
         })
     }
 }
@@ -331,6 +344,69 @@ impl SlowlorisConfig {
             max_connections_per_ip,
             connection_rate_per_sec,
             idle_timeout_secs,
+            storage,
+            redis_url,
+        })
+    }
+}
+
+impl ChallengeConfig {
+    fn from_env() -> Result<Self> {
+        let enabled = env::var("CHALLENGE_ENABLED")
+            .unwrap_or_else(|_| "false".to_string())
+            .parse::<bool>()
+            .map_err(|e| ArmorError::Config(format!("Invalid CHALLENGE_ENABLED: {}", e)))?;
+
+        let difficulty = env::var("CHALLENGE_DIFFICULTY")
+            .unwrap_or_else(|_| "20".to_string())
+            .parse::<u8>()
+            .map_err(|e| ArmorError::Config(format!("Invalid CHALLENGE_DIFFICULTY: {}", e)))?;
+
+        if !(16..=24).contains(&difficulty) {
+            return Err(ArmorError::Config(
+                "CHALLENGE_DIFFICULTY must be 16-24".to_string(),
+            ));
+        }
+
+        let timeout_secs = env::var("CHALLENGE_TIMEOUT_SECS")
+            .unwrap_or_else(|_| "300".to_string())
+            .parse::<u64>()
+            .map_err(|e| ArmorError::Config(format!("Invalid CHALLENGE_TIMEOUT_SECS: {}", e)))?;
+
+        let session_duration_secs = env::var("CHALLENGE_SESSION_DURATION_SECS")
+            .unwrap_or_else(|_| "3600".to_string())
+            .parse::<u64>()
+            .map_err(|e| {
+                ArmorError::Config(format!("Invalid CHALLENGE_SESSION_DURATION_SECS: {}", e))
+            })?;
+
+        let storage_str = env::var("CHALLENGE_STORAGE").unwrap_or_else(|_| "memory".to_string());
+
+        let storage = match storage_str.to_lowercase().as_str() {
+            "memory" => StorageType::Memory,
+            #[cfg(feature = "redis-storage")]
+            "redis" => StorageType::Redis,
+            _ => {
+                return Err(ArmorError::Config(format!(
+                    "Invalid CHALLENGE_STORAGE: {}. Expected 'memory' or 'redis'",
+                    storage_str
+                )));
+            }
+        };
+
+        let redis_url = if storage == StorageType::Memory {
+            None
+        } else {
+            Some(env::var("REDIS_URL").map_err(|_| {
+                ArmorError::Config("REDIS_URL is required when using Redis storage".to_string())
+            })?)
+        };
+
+        Ok(Self {
+            enabled,
+            difficulty,
+            timeout_secs,
+            session_duration_secs,
             storage,
             redis_url,
         })

@@ -72,7 +72,7 @@ async fn test_proxy_forwards_to_backend() {
 
     let filter_chain = FilterChain::new().add_filter(Arc::new(PassthroughFilter));
 
-    let tracker_config = ConnectionTrackerConfig::new(u32::MAX, 0, u64::MAX);
+    let tracker_config = ConnectionTrackerConfig::new(u32::MAX, 0, 3600);
     let connection_tracker = ConnectionTracker::with_in_memory(tracker_config);
 
     let proxy_addr = SocketAddr::from(([127, 0, 0, 1], 0));
@@ -82,6 +82,7 @@ async fn test_proxy_forwards_to_backend() {
         proxy_client,
         connection_tracker,
         disabled_slowloris_config(),
+        None,
     )
     .await
     .unwrap();
@@ -161,7 +162,7 @@ async fn test_proxy_adds_forwarding_headers() {
     let filter_chain = FilterChain::new().add_filter(Arc::new(PassthroughFilter));
 
     // Create a disabled connection tracker for tests (high limits)
-    let tracker_config = ConnectionTrackerConfig::new(u32::MAX, 0, u64::MAX);
+    let tracker_config = ConnectionTrackerConfig::new(u32::MAX, 0, 3600);
     let connection_tracker = ConnectionTracker::with_in_memory(tracker_config);
 
     let proxy_addr = SocketAddr::from(([127, 0, 0, 1], 0));
@@ -171,6 +172,7 @@ async fn test_proxy_adds_forwarding_headers() {
         proxy_client,
         connection_tracker,
         disabled_slowloris_config(),
+        None,
     )
     .await
     .unwrap();
@@ -205,7 +207,7 @@ async fn test_proxy_returns_bad_gateway_on_backend_failure() {
     let filter_chain = FilterChain::new().add_filter(Arc::new(PassthroughFilter));
 
     // Create a disabled connection tracker for tests (high limits)
-    let tracker_config = ConnectionTrackerConfig::new(u32::MAX, 0, u64::MAX);
+    let tracker_config = ConnectionTrackerConfig::new(u32::MAX, 0, 3600);
     let connection_tracker = ConnectionTracker::with_in_memory(tracker_config);
 
     let proxy_addr = SocketAddr::from(([127, 0, 0, 1], 0));
@@ -215,6 +217,7 @@ async fn test_proxy_returns_bad_gateway_on_backend_failure() {
         proxy_client,
         connection_tracker,
         disabled_slowloris_config(),
+        None,
     )
     .await
     .unwrap();
