@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use http_body_util::{BodyExt, Full};
+use http_body_util::{BodyExt, Full, Limited};
 use hyper::body::Bytes;
 use hyper::{Request, Response, StatusCode};
 use serde::Deserialize;
@@ -30,7 +30,19 @@ impl ChallengeHandler {
         req: Request<hyper::body::Incoming>,
         remote_addr: SocketAddr,
     ) -> Result<Response<Full<Bytes>>, hyper::Error> {
-        let whole_body = req.collect().await?.to_bytes();
+        // Limit body to 1KB to prevent DoS attacks
+        const MAX_BODY_SIZE: usize = 1024;
+        let limited_body = Limited::new(req.into_body(), MAX_BODY_SIZE);
+
+        let whole_body = match limited_body.collect().await {
+            Ok(collected) => collected.to_bytes(),
+            Err(_) => {
+                return Ok(error_response(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "Request body too large (max 1KB)",
+                ));
+            }
+        };
 
         let verify_req: VerifyRequest = match serde_json::from_slice(&whole_body) {
             Ok(req) => req,
@@ -63,7 +75,20 @@ impl ChallengeHandler {
             }
         };
 
-        if !challenge.verify(nonce) {
+        let challenge_clone = challenge.clone();
+        let is_valid =
+            match tokio::task::spawn_blocking(move || challenge_clone.verify(nonce)).await {
+                Ok(result) => result,
+                Err(e) => {
+                    tracing::error!(error = %e, "PoW verification task panicked");
+                    return Ok(error_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Verification failed",
+                    ));
+                }
+            };
+
+        if !is_valid {
             return Ok(error_response(
                 StatusCode::FORBIDDEN,
                 "Invalid proof of work",

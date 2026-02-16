@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use futures::future;
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Bytes, Incoming};
 use hyper::server::conn::http1;
@@ -555,6 +556,118 @@ async fn test_redis_storage_integration() {
 
     let response = client.request(req).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+
+    backend_handle.abort();
+}
+
+#[tokio::test]
+async fn test_verify_challenge_body_size_limit() {
+    let config = ProofOfWorkConfig::new(16, 300, 3600);
+    let storage = Arc::new(InMemoryChallengeStorage::new());
+
+    let (proxy_addr, backend_handle) = setup_test_server(config, storage, vec![], true).await;
+
+    let client: Client<HttpConnector, Full<Bytes>> =
+        Client::builder(hyper_util::rt::TokioExecutor::new()).build_http();
+
+    let large_string = "x".repeat(2000);
+    let oversized_body = json!({
+        "challenge": large_string,
+        "nonce": "12345"
+    });
+
+    let req = hyper::Request::builder()
+        .uri(format!("http://{}/verify-challenge", proxy_addr))
+        .method(Method::POST)
+        .header("Content-Type", "application/json")
+        .body(Full::new(Bytes::from(oversized_body.to_string())))
+        .unwrap();
+
+    let response = client.request(req).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+    let body = response.collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["success"], false);
+    assert!(json["error"].as_str().unwrap().contains("too large"));
+
+    backend_handle.abort();
+}
+
+#[tokio::test]
+async fn test_concurrent_pow_verifications() {
+    let config = ProofOfWorkConfig::new(16, 300, 3600); // difficulty=16 for faster solving
+    let storage = Arc::new(InMemoryChallengeStorage::new());
+
+    let (proxy_addr, backend_handle) = setup_test_server(config, storage, vec![], true).await;
+
+    let client: Client<HttpConnector, Full<Bytes>> =
+        Client::builder(hyper_util::rt::TokioExecutor::new()).build_http();
+
+    let challenge = Challenge::generate(16);
+    let nonce = solve_challenge_sync(&challenge);
+    let challenge_encoded = challenge.encode();
+
+    let num_requests = 100;
+    let mut tasks = Vec::new();
+
+    for i in 0..num_requests {
+        let client_clone = client.clone();
+        let proxy_addr_clone = proxy_addr;
+        let challenge_clone = challenge_encoded.clone();
+        let nonce_clone = nonce;
+
+        let task = tokio::spawn(async move {
+            let body = json!({
+                "challenge": challenge_clone,
+                "nonce": nonce_clone.to_string()
+            });
+
+            let req = hyper::Request::builder()
+                .uri(format!("http://{}/verify-challenge", proxy_addr_clone))
+                .method(Method::POST)
+                .header("Content-Type", "application/json")
+                .body(Full::new(Bytes::from(body.to_string())))
+                .unwrap();
+
+            let start = std::time::Instant::now();
+            let response = client_clone.request(req).await.unwrap();
+            let latency = start.elapsed();
+
+            (i, response.status(), latency)
+        });
+
+        tasks.push(task);
+    }
+
+    let results = future::join_all(tasks).await;
+
+    let mut success_count = 0;
+    let mut total_latency = std::time::Duration::ZERO;
+
+    for result in results {
+        let (idx, status, latency) = result.unwrap();
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "Request {} failed with status {}",
+            idx,
+            status
+        );
+        success_count += 1;
+        total_latency += latency;
+    }
+
+    assert_eq!(success_count, num_requests, "Not all requests succeeded");
+
+    let avg_latency = total_latency / num_requests;
+    println!(
+        "✅ {} concurrent verifications completed successfully",
+        num_requests
+    );
+    println!("   Average latency: {:?}", avg_latency);
 
     backend_handle.abort();
 }

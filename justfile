@@ -8,7 +8,7 @@ build:
 
 # Build for development
 build-dev:
-    cargo build
+    cargo build --all-features
 
 # Run all tests
 test:
@@ -20,13 +20,13 @@ test-verbose:
 
 # Run specific test
 test-one TEST:
-    cargo test {{TEST}} -- --nocapture
+    cargo test --all-features {{TEST}} -- --nocapture
 
 # Run the server locally
 run:
     #!/usr/bin/env bash
     [ -f .env ] || cp .env.example .env
-    cargo run
+    cargo run --all-features
 
 # Format code
 fmt:
@@ -51,7 +51,7 @@ install: build
 
 # Generate documentation
 docs:
-    cargo doc --no-deps --open
+    cargo doc --all-features --no-deps --open
 
 # Run security audit
 audit:
@@ -59,11 +59,11 @@ audit:
 
 # Watch and auto-rebuild on changes
 watch:
-    cargo watch -x run
+    cargo watch -x "run --all-features"
 
 # Run benchmarks
 bench:
-    cargo bench
+    cargo bench --all-features
 
 all-check:
     just fmt
