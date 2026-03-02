@@ -20,6 +20,9 @@ pub enum ArmorError {
     #[error("Upstream connection failed: {0}")]
     Upstream(String),
 
+    #[error("Upstream circuit breaker is open")]
+    CircuitOpen,
+
     #[error("Configuration error: {0}")]
     Config(String),
 }

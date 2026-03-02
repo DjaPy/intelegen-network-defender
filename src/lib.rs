@@ -9,6 +9,8 @@
 pub mod config;
 pub mod error;
 pub mod filter;
+pub mod metrics;
+pub mod metrics_server;
 pub mod proxy;
 pub mod server;
 pub mod storage;

@@ -13,10 +13,23 @@ use crate::error::{ArmorError, Result};
 pub struct Config {
     pub server: ServerConfig,
     pub proxy: ProxyConfig,
+    pub circuit_breaker: CircuitBreakerConfig,
     pub rate_limit: RateLimitConfig,
     pub fingerprint: FingerprintConfig,
     pub slowloris: SlowlorisConfig,
     pub challenge: ChallengeConfig,
+    pub metrics: MetricsConfig,
+}
+
+/// Metrics server configuration (separate internal port)
+#[derive(Debug, Clone)]
+pub struct MetricsConfig {
+    /// Enable the metrics server (default: false)
+    pub enabled: bool,
+    /// Bind address — should be 127.0.0.1 in production
+    pub host: String,
+    /// Metrics server port (default: 9090)
+    pub port: u16,
 }
 
 /// Server binding configuration
@@ -32,6 +45,15 @@ pub struct ProxyConfig {
     pub upstream_url: String,
     pub timeout: Duration,
     pub preserve_host: bool,
+}
+
+/// Circuit breaker settings for upstream protection
+#[derive(Debug, Clone)]
+pub struct CircuitBreakerConfig {
+    pub enabled: bool,
+    pub failure_threshold: u32,
+    pub open_timeout_secs: u64,
+    pub half_open_max_requests: u32,
 }
 
 /// Rate limiting settings
@@ -99,10 +121,34 @@ impl Config {
         Ok(Self {
             server: ServerConfig::from_env()?,
             proxy: ProxyConfig::from_env()?,
+            circuit_breaker: CircuitBreakerConfig::from_env()?,
             rate_limit: RateLimitConfig::from_env()?,
             fingerprint: FingerprintConfig::from_env()?,
             slowloris: SlowlorisConfig::from_env()?,
             challenge: ChallengeConfig::from_env()?,
+            metrics: MetricsConfig::from_env()?,
+        })
+    }
+}
+
+impl MetricsConfig {
+    fn from_env() -> Result<Self> {
+        let enabled = env::var("METRICS_ENABLED")
+            .unwrap_or_else(|_| "false".to_string())
+            .parse::<bool>()
+            .map_err(|e| ArmorError::Config(format!("Invalid METRICS_ENABLED: {}", e)))?;
+
+        let host = env::var("METRICS_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+
+        let port = env::var("METRICS_PORT")
+            .unwrap_or_else(|_| "9090".to_string())
+            .parse::<u16>()
+            .map_err(|e| ArmorError::Config(format!("Invalid METRICS_PORT: {}", e)))?;
+
+        Ok(Self {
+            enabled,
+            host,
+            port,
         })
     }
 }
@@ -190,6 +236,64 @@ impl RateLimitConfig {
             burst_capacity,
             storage,
             redis_url,
+        })
+    }
+}
+
+impl CircuitBreakerConfig {
+    fn from_env() -> Result<Self> {
+        let enabled = env::var("CIRCUIT_BREAKER_ENABLED")
+            .unwrap_or_else(|_| "false".to_string())
+            .parse::<bool>()
+            .map_err(|e| ArmorError::Config(format!("Invalid CIRCUIT_BREAKER_ENABLED: {}", e)))?;
+
+        let failure_threshold = env::var("CIRCUIT_BREAKER_FAILURE_THRESHOLD")
+            .unwrap_or_else(|_| "5".to_string())
+            .parse::<u32>()
+            .map_err(|e| {
+                ArmorError::Config(format!("Invalid CIRCUIT_BREAKER_FAILURE_THRESHOLD: {}", e))
+            })?;
+
+        if failure_threshold == 0 {
+            return Err(ArmorError::Config(
+                "CIRCUIT_BREAKER_FAILURE_THRESHOLD must be > 0".to_string(),
+            ));
+        }
+
+        let open_timeout_secs = env::var("CIRCUIT_BREAKER_OPEN_TIMEOUT_SECS")
+            .unwrap_or_else(|_| "60".to_string())
+            .parse::<u64>()
+            .map_err(|e| {
+                ArmorError::Config(format!("Invalid CIRCUIT_BREAKER_OPEN_TIMEOUT_SECS: {}", e))
+            })?;
+
+        if open_timeout_secs == 0 {
+            return Err(ArmorError::Config(
+                "CIRCUIT_BREAKER_OPEN_TIMEOUT_SECS must be > 0".to_string(),
+            ));
+        }
+
+        let half_open_max_requests = env::var("CIRCUIT_BREAKER_HALF_OPEN_MAX_REQUESTS")
+            .unwrap_or_else(|_| "1".to_string())
+            .parse::<u32>()
+            .map_err(|e| {
+                ArmorError::Config(format!(
+                    "Invalid CIRCUIT_BREAKER_HALF_OPEN_MAX_REQUESTS: {}",
+                    e
+                ))
+            })?;
+
+        if half_open_max_requests == 0 {
+            return Err(ArmorError::Config(
+                "CIRCUIT_BREAKER_HALF_OPEN_MAX_REQUESTS must be > 0".to_string(),
+            ));
+        }
+
+        Ok(Self {
+            enabled,
+            failure_threshold,
+            open_timeout_secs,
+            half_open_max_requests,
         })
     }
 }
@@ -506,6 +610,56 @@ mod tests {
                 assert!(config.enabled);
                 assert_eq!(config.requests_per_second, 500);
                 assert_eq!(config.burst_capacity, 50);
+            },
+        );
+    }
+
+    #[test]
+    fn test_circuit_breaker_defaults() {
+        temp_env::with_vars_unset(
+            vec![
+                "CIRCUIT_BREAKER_ENABLED",
+                "CIRCUIT_BREAKER_FAILURE_THRESHOLD",
+                "CIRCUIT_BREAKER_OPEN_TIMEOUT_SECS",
+                "CIRCUIT_BREAKER_HALF_OPEN_MAX_REQUESTS",
+            ],
+            || {
+                let config = CircuitBreakerConfig::from_env().unwrap();
+                assert!(!config.enabled);
+                assert_eq!(config.failure_threshold, 5);
+                assert_eq!(config.open_timeout_secs, 60);
+                assert_eq!(config.half_open_max_requests, 1);
+            },
+        );
+    }
+
+    #[test]
+    fn test_circuit_breaker_custom() {
+        temp_env::with_vars(
+            vec![
+                ("CIRCUIT_BREAKER_ENABLED", Some("true")),
+                ("CIRCUIT_BREAKER_FAILURE_THRESHOLD", Some("7")),
+                ("CIRCUIT_BREAKER_OPEN_TIMEOUT_SECS", Some("30")),
+                ("CIRCUIT_BREAKER_HALF_OPEN_MAX_REQUESTS", Some("2")),
+            ],
+            || {
+                let config = CircuitBreakerConfig::from_env().unwrap();
+                assert!(config.enabled);
+                assert_eq!(config.failure_threshold, 7);
+                assert_eq!(config.open_timeout_secs, 30);
+                assert_eq!(config.half_open_max_requests, 2);
+            },
+        );
+    }
+
+    #[test]
+    fn test_circuit_breaker_validation() {
+        temp_env::with_vars(
+            vec![("CIRCUIT_BREAKER_FAILURE_THRESHOLD", Some("0"))],
+            || {
+                let result = CircuitBreakerConfig::from_env();
+                assert!(result.is_err());
+                assert!(result.unwrap_err().to_string().contains("must be > 0"));
             },
         );
     }

@@ -12,7 +12,7 @@ pub mod connection_tracker;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use http_body_util::Full;
 use hyper::body::{Bytes, Incoming};
@@ -22,6 +22,8 @@ use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::{TokioIo, TokioTimer};
 use tokio::net::TcpListener;
 use tracing::{error, info, warn};
+
+use crate::metrics::METRICS;
 
 use crate::config::SlowlorisConfig;
 use crate::error::{ArmorError, Result};
@@ -112,6 +114,8 @@ impl Server {
                 }
             };
 
+            METRICS.active_connections.inc();
+
             let io = TokioIo::new(stream);
             let filter_chain = self.filter_chain.clone();
             let proxy_client = self.proxy_client.clone();
@@ -157,6 +161,7 @@ impl Server {
                 }
 
                 drop(guard);
+                METRICS.active_connections.dec();
             });
         }
     }
@@ -180,14 +185,26 @@ async fn handle_request(
     proxy_client: Arc<ProxyClient>,
     challenge_handler: Option<Arc<ChallengeHandler>>,
 ) -> std::result::Result<Response<Full<Bytes>>, hyper::Error> {
-    let method = req.method();
-    let uri = req.uri();
+    let method = req.method().clone();
+    let uri = req.uri().clone();
 
     info!(%remote_addr, %method, %uri, "Request received");
 
-    let is_verify_endpoint = uri.path() == "/verify-challenge" && *method == Method::POST;
+    let start = Instant::now();
+    let method_str = method.as_str().to_string();
+
+    let is_verify_endpoint = uri.path() == "/verify-challenge" && method == Method::POST;
     let headers = req.headers().clone();
     let action = filter_chain.execute(&req, remote_addr).await;
+
+    METRICS
+        .filter_actions_total
+        .with_label_values(&[match &action {
+            FilterAction::Allow => "allow",
+            FilterAction::Deny { .. } => "deny",
+            FilterAction::Challenge { .. } => "challenge",
+        }])
+        .inc();
 
     let response = match action {
         FilterAction::Allow => {
@@ -220,10 +237,21 @@ async fn handle_request(
                     Ok(response) => response,
                     Err(e) => {
                         error!(%remote_addr, error = %e, "Proxy forward failed");
+                        if matches!(e, ArmorError::CircuitOpen) {
+                            METRICS.circuit_breaker_open_total.inc();
+                        } else {
+                            METRICS.upstream_failures_total.inc();
+                        }
+                        let (status, body) = if matches!(e, ArmorError::CircuitOpen) {
+                            (StatusCode::SERVICE_UNAVAILABLE, "Service Unavailable")
+                        } else {
+                            (StatusCode::BAD_GATEWAY, "Bad Gateway")
+                        };
+
                         Response::builder()
-                            .status(StatusCode::BAD_GATEWAY)
+                            .status(status)
                             .header("Content-Type", "text/plain")
-                            .body(Full::new(Bytes::from("Bad Gateway")))
+                            .body(Full::new(Bytes::from(body)))
                             .unwrap()
                     }
                 }
@@ -231,6 +259,16 @@ async fn handle_request(
         }
         other => filter_chain.action_to_response(other, &headers),
     };
+
+    let status_str = response.status().as_str().to_string();
+    METRICS
+        .http_requests_total
+        .with_label_values(&[&method_str, &status_str])
+        .inc();
+    METRICS
+        .http_request_duration_seconds
+        .with_label_values(&[&method_str])
+        .observe(start.elapsed().as_secs_f64());
 
     Ok(response)
 }

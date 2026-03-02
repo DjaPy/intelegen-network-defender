@@ -7,7 +7,7 @@ use http_body_util::Full;
 use hyper::body::Bytes;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use hyper::{Response, StatusCode, body::Incoming};
+use hyper::{Request, Response, StatusCode, body::Incoming};
 use hyper_util::client::legacy::{Client, connect::HttpConnector};
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
@@ -234,5 +234,58 @@ async fn test_proxy_returns_bad_gateway_on_backend_failure() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    server_handle.abort();
+}
+
+#[tokio::test]
+async fn test_circuit_breaker_returns_503_when_open() {
+    let proxy_config = ProxyConfig::new("http://localhost:9999".to_string()).with_circuit_breaker(
+        intellegen_http_defender::proxy::CircuitBreakerConfig {
+            enabled: true,
+            failure_threshold: 2,
+            open_timeout: std::time::Duration::from_secs(60),
+            half_open_max_requests: 1,
+        },
+    );
+    let proxy_client = ProxyClient::new(proxy_config).unwrap();
+
+    let filter_chain = FilterChain::new().add_filter(Arc::new(PassthroughFilter));
+
+    let tracker_config = ConnectionTrackerConfig::new(u32::MAX, 0, 3600);
+    let connection_tracker = ConnectionTracker::with_in_memory(tracker_config);
+
+    let proxy_addr = SocketAddr::from(([127, 0, 0, 1], 0));
+    let server = Server::bind(
+        proxy_addr,
+        filter_chain,
+        proxy_client,
+        connection_tracker,
+        disabled_slowloris_config(),
+        None,
+    )
+    .await
+    .unwrap();
+    let proxy_addr = server.addr();
+
+    let server_handle = tokio::spawn(async move { server.run().await });
+
+    let client: Client<HttpConnector, Full<Bytes>> =
+        Client::builder(hyper_util::rt::TokioExecutor::new()).build_http();
+
+    let request = || {
+        Request::builder()
+            .uri(format!("http://{}/test", proxy_addr))
+            .body(Full::new(Bytes::new()))
+            .unwrap()
+    };
+
+    let first = client.request(request()).await.unwrap();
+    let second = client.request(request()).await.unwrap();
+    let third = client.request(request()).await.unwrap();
+
+    assert_eq!(first.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(second.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(third.status(), StatusCode::SERVICE_UNAVAILABLE);
+
     server_handle.abort();
 }

@@ -12,7 +12,10 @@ use intellegen_http_defender::filter::challenge_storage::{
 use intellegen_http_defender::filter::{
     FilterChain, FingerprintFilter, PassthroughFilter, RateLimitFilter,
 };
-use intellegen_http_defender::proxy::{ProxyClient, ProxyConfig as ProxyClientConfig};
+use intellegen_http_defender::metrics_server::MetricsServer;
+use intellegen_http_defender::proxy::{
+    CircuitBreakerConfig, ProxyClient, ProxyConfig as ProxyClientConfig,
+};
 use intellegen_http_defender::server::{
     ChallengeHandler, ConnectionTracker, ConnectionTrackerConfig, Server,
 };
@@ -57,6 +60,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     info!(
         "Challenge-response: enabled={}, difficulty={}, timeout={}s",
         config.challenge.enabled, config.challenge.difficulty, config.challenge.timeout_secs
+    );
+    info!(
+        "Circuit breaker: enabled={}, threshold={}, open_timeout={}s, half_open_max_requests={}",
+        config.circuit_breaker.enabled,
+        config.circuit_breaker.failure_threshold,
+        config.circuit_breaker.open_timeout_secs,
+        config.circuit_breaker.half_open_max_requests
+    );
+    info!(
+        "Metrics: enabled={}, address={}:{}",
+        config.metrics.enabled, config.metrics.host, config.metrics.port
     );
 
     let addr: SocketAddr = format!("{}:{}", config.server.host, config.server.port)
@@ -174,7 +188,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let proxy_config = ProxyClientConfig::new(config.proxy.upstream_url.clone())
         .with_timeout(config.proxy.timeout)
-        .with_preserve_host(config.proxy.preserve_host);
+        .with_preserve_host(config.proxy.preserve_host)
+        .with_circuit_breaker(CircuitBreakerConfig {
+            enabled: config.circuit_breaker.enabled,
+            failure_threshold: config.circuit_breaker.failure_threshold,
+            open_timeout: std::time::Duration::from_secs(config.circuit_breaker.open_timeout_secs),
+            half_open_max_requests: config.circuit_breaker.half_open_max_requests,
+        });
 
     let proxy_client = ProxyClient::new(proxy_config)?;
 
@@ -219,6 +239,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     .await?;
 
     info!("Server listening on {}", server.addr());
+
+    if config.metrics.enabled {
+        let metrics_addr: SocketAddr = format!("{}:{}", config.metrics.host, config.metrics.port)
+            .parse()
+            .map_err(|e| format!("Invalid metrics address: {}", e))?;
+        let metrics_server = MetricsServer::bind(metrics_addr).await?;
+        info!("Metrics server listening on {}", metrics_server.addr());
+        tokio::spawn(async move { metrics_server.run().await });
+    }
 
     server.run().await?;
 
