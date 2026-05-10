@@ -83,6 +83,7 @@ impl AppMetrics {
 /// Encode all registered metrics in Prometheus text format.
 /// Returns (body bytes, content-type string).
 pub fn gather_text() -> (Vec<u8>, String) {
+    let _ = &*METRICS;
     let encoder = TextEncoder::new();
     let families = prometheus::gather();
     let mut buf = Vec::new();

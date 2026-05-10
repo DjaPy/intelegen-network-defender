@@ -19,6 +19,17 @@ pub struct Config {
     pub slowloris: SlowlorisConfig,
     pub challenge: ChallengeConfig,
     pub metrics: MetricsConfig,
+    #[cfg(feature = "tls")]
+    pub tls: TlsConfig,
+}
+
+/// TLS termination configuration (feature: tls)
+#[cfg(feature = "tls")]
+#[derive(Debug, Clone)]
+pub struct TlsConfig {
+    pub enabled: bool,
+    pub cert_path: String,
+    pub key_path: String,
 }
 
 /// Metrics server configuration (separate internal port)
@@ -84,6 +95,10 @@ pub struct FingerprintConfig {
     pub user_agent_blacklist: Vec<String>,
     pub strict_header_order: bool,
     pub require_common_headers: bool,
+    #[cfg(feature = "tls")]
+    pub ja3_blocklist: Vec<String>,
+    #[cfg(feature = "tls")]
+    pub ja3_challenge_list: Vec<String>,
 }
 
 /// Slowloris protection settings
@@ -127,6 +142,8 @@ impl Config {
             slowloris: SlowlorisConfig::from_env()?,
             challenge: ChallengeConfig::from_env()?,
             metrics: MetricsConfig::from_env()?,
+            #[cfg(feature = "tls")]
+            tls: TlsConfig::from_env()?,
         })
     }
 }
@@ -365,6 +382,22 @@ impl FingerprintConfig {
                 ArmorError::Config(format!("Invalid FINGERPRINT_REQUIRE_COMMON_HEADERS: {}", e))
             })?;
 
+        #[cfg(feature = "tls")]
+        let ja3_blocklist = env::var("FINGERPRINT_JA3_BLOCKLIST")
+            .unwrap_or_default()
+            .split(',')
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.trim().to_lowercase())
+            .collect();
+
+        #[cfg(feature = "tls")]
+        let ja3_challenge_list = env::var("FINGERPRINT_JA3_CHALLENGE_LIST")
+            .unwrap_or_default()
+            .split(',')
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.trim().to_lowercase())
+            .collect();
+
         Ok(Self {
             enabled,
             deny_threshold,
@@ -373,6 +406,29 @@ impl FingerprintConfig {
             user_agent_blacklist,
             strict_header_order,
             require_common_headers,
+            #[cfg(feature = "tls")]
+            ja3_blocklist,
+            #[cfg(feature = "tls")]
+            ja3_challenge_list,
+        })
+    }
+}
+
+#[cfg(feature = "tls")]
+impl TlsConfig {
+    fn from_env() -> Result<Self> {
+        let enabled = env::var("TLS_ENABLED")
+            .unwrap_or_else(|_| "false".to_string())
+            .parse::<bool>()
+            .map_err(|e| ArmorError::Config(format!("Invalid TLS_ENABLED: {}", e)))?;
+
+        let cert_path = env::var("TLS_CERT_PATH").unwrap_or_else(|_| "cert.pem".to_string());
+        let key_path = env::var("TLS_KEY_PATH").unwrap_or_else(|_| "key.pem".to_string());
+
+        Ok(Self {
+            enabled,
+            cert_path,
+            key_path,
         })
     }
 }

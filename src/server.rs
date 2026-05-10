@@ -41,6 +41,8 @@ pub struct Server {
     connection_tracker: Arc<ConnectionTracker>,
     slowloris_config: SlowlorisConfig,
     challenge_handler: Option<Arc<ChallengeHandler>>,
+    #[cfg(feature = "tls")]
+    tls_acceptor: Option<Arc<tokio_rustls::TlsAcceptor>>,
 }
 
 impl Server {
@@ -70,7 +72,16 @@ impl Server {
             connection_tracker: Arc::new(connection_tracker),
             slowloris_config,
             challenge_handler: challenge_handler.map(Arc::new),
+            #[cfg(feature = "tls")]
+            tls_acceptor: None,
         })
+    }
+
+    /// Enable TLS termination with JA3/JA4 fingerprinting.
+    #[cfg(feature = "tls")]
+    pub fn with_tls(mut self, acceptor: tokio_rustls::TlsAcceptor) -> Self {
+        self.tls_acceptor = Some(Arc::new(acceptor));
+        self
     }
 
     pub async fn run(self) -> Result<()> {
@@ -116,13 +127,74 @@ impl Server {
 
             METRICS.active_connections.inc();
 
-            let io = TokioIo::new(stream);
             let filter_chain = self.filter_chain.clone();
             let proxy_client = self.proxy_client.clone();
             let tracker = self.connection_tracker.clone();
             let challenge_handler = self.challenge_handler.clone();
             let header_timeout = Duration::from_secs(self.slowloris_config.header_timeout_secs);
             let request_timeout = Duration::from_secs(self.slowloris_config.request_timeout_secs);
+
+            // TLS detection via peek — does not consume bytes from the stream.
+            #[cfg(feature = "tls")]
+            if let Some(ref tls_acceptor) = self.tls_acceptor {
+                let mut first = [0u8; 1];
+                if stream.peek(&mut first).await.is_ok() && first[0] == 0x16 {
+                    let tls_fp = extract_tls_fingerprint(&stream).await;
+                    let acceptor = tls_acceptor.clone();
+
+                    // Extra clones for the TLS spawn — originals drop at `continue`
+                    let fc = filter_chain.clone();
+                    let pc = proxy_client.clone();
+                    let tr = tracker.clone();
+                    let ch = challenge_handler.clone();
+
+                    tokio::spawn(async move {
+                        match acceptor.accept(stream).await {
+                            Ok(tls_stream) => {
+                                let io = TokioIo::new(tls_stream);
+                                let service = service_fn(move |mut req: Request<Incoming>| {
+                                    let fp = tls_fp.clone();
+                                    let fc2 = fc.clone();
+                                    let pc2 = pc.clone();
+                                    let ch2 = ch.clone();
+                                    let tr2 = tr.clone();
+                                    async move {
+                                        tr2.update_activity(ip).await;
+                                        if let Some(fingerprint) = fp {
+                                            req.extensions_mut().insert(fingerprint);
+                                        }
+                                        handle_request(req, remote_addr, fc2, pc2, ch2).await
+                                    }
+                                });
+
+                                let conn = http1::Builder::new()
+                                    .timer(TokioTimer::new())
+                                    .header_read_timeout(header_timeout)
+                                    .serve_connection(io, service);
+
+                                match tokio::time::timeout(request_timeout, conn).await {
+                                    Ok(Ok(())) => {}
+                                    Ok(Err(e)) => {
+                                        warn!(%remote_addr, %e, "TLS connection error");
+                                    }
+                                    Err(_) => {
+                                        warn!(%remote_addr, "TLS request timeout");
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                warn!(%remote_addr, %e, "TLS handshake failed");
+                            }
+                        }
+                        drop(guard);
+                        METRICS.active_connections.dec();
+                    });
+                    continue; // skip plain HTTP spawn
+                }
+            }
+
+            // Plain HTTP connection
+            let io = TokioIo::new(stream);
 
             tokio::spawn(async move {
                 let service = service_fn(move |req| {
@@ -168,6 +240,20 @@ impl Server {
 
     pub fn addr(&self) -> SocketAddr {
         self.addr
+    }
+}
+
+/// Peek at a TCP stream and extract a TLS fingerprint from the ClientHello.
+/// Uses `peek()` so rustls receives the full record for the handshake.
+#[cfg(feature = "tls")]
+async fn extract_tls_fingerprint(
+    stream: &tokio::net::TcpStream,
+) -> Option<std::sync::Arc<crate::tls::TlsFingerprint>> {
+    let mut buf = vec![0u8; 8192];
+    match stream.peek(&mut buf).await {
+        Ok(n) if n > 0 => crate::tls::parse_clienthello(&buf[..n])
+            .map(|info| std::sync::Arc::new(crate::tls::TlsFingerprint::compute(&info))),
+        _ => None,
     }
 }
 

@@ -27,57 +27,11 @@ use intellegen_http_defender::filter::challenge_storage::RedisChallengeStorage;
 #[cfg(feature = "redis-storage")]
 use intellegen_http_defender::storage::SharedRedisClient;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    FmtSubscriber::builder()
-        .with_max_level(Level::INFO)
-        .with_target(false)
-        .init();
-
-    let config = Config::from_env()?;
-
-    info!("Starting Intellegen HTTP Defender");
-    info!("Server: {}:{}", config.server.host, config.server.port);
-    info!("Upstream: {}", config.proxy.upstream_url);
-    info!(
-        "Fingerprinting: enabled={}, deny_threshold={}, challenge_threshold={}",
-        config.fingerprint.enabled,
-        config.fingerprint.deny_threshold,
-        config.fingerprint.challenge_threshold
-    );
-    info!(
-        "Rate limiting: enabled={}, rps={}, burst={}",
-        config.rate_limit.enabled,
-        config.rate_limit.requests_per_second,
-        config.rate_limit.burst_capacity
-    );
-    info!(
-        "Slowloris protection: enabled={}, max_connections={}, connection_rate={}",
-        config.slowloris.enabled,
-        config.slowloris.max_connections_per_ip,
-        config.slowloris.connection_rate_per_sec
-    );
-    info!(
-        "Challenge-response: enabled={}, difficulty={}, timeout={}s",
-        config.challenge.enabled, config.challenge.difficulty, config.challenge.timeout_secs
-    );
-    info!(
-        "Circuit breaker: enabled={}, threshold={}, open_timeout={}s, half_open_max_requests={}",
-        config.circuit_breaker.enabled,
-        config.circuit_breaker.failure_threshold,
-        config.circuit_breaker.open_timeout_secs,
-        config.circuit_breaker.half_open_max_requests
-    );
-    info!(
-        "Metrics: enabled={}, address={}:{}",
-        config.metrics.enabled, config.metrics.host, config.metrics.port
-    );
-
+async fn build_server(config: &Config) -> Result<Server, Box<dyn std::error::Error + Send + Sync>> {
     let addr: SocketAddr = format!("{}:{}", config.server.host, config.server.port)
         .parse()
         .map_err(|e| format!("Invalid server address: {}", e))?;
 
-    // Create shared Redis client if rate limiting, Slowloris, or challenge uses Redis
     #[cfg(feature = "redis-storage")]
     let shared_redis_client = {
         let needs_redis = matches!(config.rate_limit.storage, StorageType::Redis)
@@ -111,11 +65,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             config.fingerprint.strict_header_order,
             config.fingerprint.require_common_headers,
         );
+
+        #[cfg(feature = "tls")]
+        let fingerprint_config = fingerprint_config
+            .with_ja3_blocklist(config.fingerprint.ja3_blocklist.clone())
+            .with_ja3_challenge_list(config.fingerprint.ja3_challenge_list.clone());
+
         let filter = FingerprintFilter::new(fingerprint_config);
         filter_chain = filter_chain.add_filter(Arc::new(filter));
     }
 
-    // Challenge-response filter and handler
     let challenge_handler = if config.challenge.enabled {
         info!(
             "Challenge-response enabled: difficulty={}, timeout={}s, session_duration={}s",
@@ -237,6 +196,70 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         challenge_handler,
     )
     .await?;
+
+    #[cfg(feature = "tls")]
+    let server = if config.tls.enabled {
+        use intellegen_http_defender::tls::build_acceptor;
+        info!(
+            "TLS enabled: cert={}, key={}",
+            config.tls.cert_path, config.tls.key_path
+        );
+        let acceptor = build_acceptor(&config.tls.cert_path, &config.tls.key_path)?;
+        server.with_tls(acceptor)
+    } else {
+        server
+    };
+
+    Ok(server)
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    FmtSubscriber::builder()
+        .with_max_level(Level::INFO)
+        .with_target(false)
+        .init();
+
+    let config = Config::from_env()?;
+
+    info!("Starting Intellegen HTTP Defender");
+    info!("Server: {}:{}", config.server.host, config.server.port);
+    info!("Upstream: {}", config.proxy.upstream_url);
+    info!(
+        "Fingerprinting: enabled={}, deny_threshold={}, challenge_threshold={}",
+        config.fingerprint.enabled,
+        config.fingerprint.deny_threshold,
+        config.fingerprint.challenge_threshold
+    );
+    info!(
+        "Rate limiting: enabled={}, rps={}, burst={}",
+        config.rate_limit.enabled,
+        config.rate_limit.requests_per_second,
+        config.rate_limit.burst_capacity
+    );
+    info!(
+        "Slowloris protection: enabled={}, max_connections={}, connection_rate={}",
+        config.slowloris.enabled,
+        config.slowloris.max_connections_per_ip,
+        config.slowloris.connection_rate_per_sec
+    );
+    info!(
+        "Challenge-response: enabled={}, difficulty={}, timeout={}s",
+        config.challenge.enabled, config.challenge.difficulty, config.challenge.timeout_secs
+    );
+    info!(
+        "Circuit breaker: enabled={}, threshold={}, open_timeout={}s, half_open_max_requests={}",
+        config.circuit_breaker.enabled,
+        config.circuit_breaker.failure_threshold,
+        config.circuit_breaker.open_timeout_secs,
+        config.circuit_breaker.half_open_max_requests
+    );
+    info!(
+        "Metrics: enabled={}, address={}:{}",
+        config.metrics.enabled, config.metrics.host, config.metrics.port
+    );
+
+    let server = build_server(&config).await?;
 
     info!("Server listening on {}", server.addr());
 

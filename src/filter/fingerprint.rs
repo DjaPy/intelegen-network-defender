@@ -28,6 +28,10 @@ pub struct FingerprintConfig {
     pub user_agent_blacklist: Vec<String>,
     pub strict_header_order: bool,
     pub require_common_headers: bool,
+    #[cfg(feature = "tls")]
+    pub ja3_blocklist: Vec<String>,
+    #[cfg(feature = "tls")]
+    pub ja3_challenge_list: Vec<String>,
 }
 
 impl FingerprintConfig {
@@ -46,7 +50,23 @@ impl FingerprintConfig {
             user_agent_blacklist,
             strict_header_order,
             require_common_headers,
+            #[cfg(feature = "tls")]
+            ja3_blocklist: Vec::new(),
+            #[cfg(feature = "tls")]
+            ja3_challenge_list: Vec::new(),
         }
+    }
+
+    #[cfg(feature = "tls")]
+    pub fn with_ja3_blocklist(mut self, blocklist: Vec<String>) -> Self {
+        self.ja3_blocklist = blocklist;
+        self
+    }
+
+    #[cfg(feature = "tls")]
+    pub fn with_ja3_challenge_list(mut self, list: Vec<String>) -> Self {
+        self.ja3_challenge_list = list;
+        self
     }
 }
 
@@ -317,7 +337,22 @@ impl FingerprintFilter {
         reasons.append(&mut order_reasons);
         reasons.append(&mut missing_reasons);
 
-        let total = user_agent_score + header_order_score + header_missing_score;
+        #[cfg(feature = "tls")]
+        let tls_score = {
+            use std::sync::Arc;
+            if let Some(fp) = req.extensions().get::<Arc<crate::tls::TlsFingerprint>>() {
+                let (score, mut tls_reasons) = self.score_tls_fingerprint(fp);
+                reasons.append(&mut tls_reasons);
+                score
+            } else {
+                0
+            }
+        };
+
+        #[cfg(not(feature = "tls"))]
+        let tls_score: u32 = 0;
+
+        let total = user_agent_score + header_order_score + header_missing_score + tls_score;
 
         FingerprintScore {
             total: total.min(100),
@@ -326,6 +361,24 @@ impl FingerprintFilter {
             header_missing_score,
             reasons,
         }
+    }
+
+    /// Score TLS fingerprint against blocklist and challenge list (0-50 points)
+    #[cfg(feature = "tls")]
+    fn score_tls_fingerprint(&self, fp: &crate::tls::TlsFingerprint) -> (u32, Vec<String>) {
+        let mut reasons = Vec::new();
+
+        if self.config.ja3_blocklist.contains(&fp.ja3) {
+            reasons.push(format!("Blocked JA3 fingerprint: {}", fp.ja3));
+            return (50, reasons);
+        }
+
+        if self.config.ja3_challenge_list.contains(&fp.ja3) {
+            reasons.push(format!("Challenged JA3 fingerprint: {}", fp.ja3));
+            return (30, reasons);
+        }
+
+        (0, reasons)
     }
 }
 

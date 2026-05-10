@@ -1,10 +1,11 @@
-use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use dashmap::DashMap;
 
 use crate::storage::Result;
 
+#[cfg(feature = "redis-storage")]
+use std::sync::Arc;
 #[cfg(feature = "redis-storage")]
 use crate::storage::{SharedRedisClient, StorageError};
 

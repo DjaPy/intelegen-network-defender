@@ -14,3 +14,6 @@ pub mod metrics_server;
 pub mod proxy;
 pub mod server;
 pub mod storage;
+
+#[cfg(feature = "tls")]
+pub mod tls;
