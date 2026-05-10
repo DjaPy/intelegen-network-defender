@@ -5,9 +5,9 @@ use dashmap::DashMap;
 use crate::storage::Result;
 
 #[cfg(feature = "redis-storage")]
-use std::sync::Arc;
-#[cfg(feature = "redis-storage")]
 use crate::storage::{SharedRedisClient, StorageError};
+#[cfg(feature = "redis-storage")]
+use std::sync::Arc;
 
 #[async_trait::async_trait]
 pub trait ChallengeStorage: Send + Sync {

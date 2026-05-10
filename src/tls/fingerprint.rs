@@ -114,7 +114,6 @@ fn build_ja4(info: &ClientHelloInfo) -> String {
         .copied()
         .collect();
 
-    // Extensions excluding GREASE, SNI (0x0000), ALPN (0x0010)
     let exts: Vec<u16> = info
         .extension_types
         .iter()
@@ -167,15 +166,13 @@ fn sha256_short(input: &str) -> String {
 /// Returns `None` if the buffer is not a valid ClientHello or parsing fails.
 pub fn parse_clienthello(buf: &[u8]) -> Option<ClientHelloInfo> {
     let mut pos = 0;
-
-    // TLS record header: content_type(1) + version(2) + length(2)
     if buf.len() < 9 {
         return None;
     }
     if buf[pos] != 0x16 {
         return None;
     }
-    pos += 3; // skip content_type + record_version
+    pos += 3;
 
     let record_length = u16::from_be_bytes([buf[pos], buf[pos + 1]]) as usize;
     pos += 2;
@@ -183,33 +180,28 @@ pub fn parse_clienthello(buf: &[u8]) -> Option<ClientHelloInfo> {
         return None;
     }
 
-    // Handshake header: msg_type(1) + length(3)
     if buf[pos] != 0x01 {
-        return None; // Not a ClientHello
+        return None;
     }
-    pos += 4; // skip msg_type + 3-byte length
+    pos += 4;
 
-    // client_version
     if pos + 2 > buf.len() {
         return None;
     }
     let client_version = u16::from_be_bytes([buf[pos], buf[pos + 1]]);
     pos += 2;
 
-    // Skip random (32 bytes)
     pos += 32;
     if pos >= buf.len() {
         return None;
     }
 
-    // Session ID
     let session_id_len = buf[pos] as usize;
     pos += 1 + session_id_len;
     if pos > buf.len() {
         return None;
     }
 
-    // Cipher suites
     if pos + 2 > buf.len() {
         return None;
     }
@@ -224,7 +216,6 @@ pub fn parse_clienthello(buf: &[u8]) -> Option<ClientHelloInfo> {
     }
     pos += cipher_suites_len;
 
-    // Compression methods
     if pos >= buf.len() {
         return None;
     }
@@ -234,7 +225,6 @@ pub fn parse_clienthello(buf: &[u8]) -> Option<ClientHelloInfo> {
         return None;
     }
 
-    // Extensions are optional (e.g., SSLv3 has none)
     if pos + 2 > buf.len() {
         return Some(ClientHelloInfo {
             client_version,
@@ -318,7 +308,6 @@ fn parse_ec_point_formats(data: &[u8], formats: &mut Vec<u8>) {
 }
 
 fn parse_alpn_first(data: &[u8]) -> Option<String> {
-    // Format: list_len(2) + proto_len(1) + proto(...)
     if data.len() < 3 {
         return None;
     }
@@ -332,7 +321,6 @@ fn parse_alpn_first(data: &[u8]) -> Option<String> {
 }
 
 fn parse_sni(data: &[u8]) -> Option<String> {
-    // Format: list_len(2) + name_type(1) + name_len(2) + name(...)
     if data.len() < 5 {
         return None;
     }
@@ -356,21 +344,15 @@ mod tests {
     ) -> Vec<u8> {
         let mut hello_body = Vec::new();
 
-        // client_version
         hello_body.extend_from_slice(&version.to_be_bytes());
-        // random (32 bytes)
         hello_body.extend_from_slice(&[0u8; 32]);
-        // session_id (0 length)
         hello_body.push(0);
-        // cipher suites
         let cipher_bytes: Vec<u8> = ciphers.iter().flat_map(|c| c.to_be_bytes()).collect();
         hello_body.extend_from_slice(&(cipher_bytes.len() as u16).to_be_bytes());
         hello_body.extend_from_slice(&cipher_bytes);
-        // compression methods (1 byte: 0x00)
         hello_body.push(1);
         hello_body.push(0);
 
-        // extensions
         if !extensions.is_empty() {
             let mut ext_bytes = Vec::new();
             for (ext_type, ext_data) in extensions {
@@ -381,8 +363,6 @@ mod tests {
             hello_body.extend_from_slice(&(ext_bytes.len() as u16).to_be_bytes());
             hello_body.extend_from_slice(&ext_bytes);
         }
-
-        // Handshake header: ClientHello(0x01) + 3-byte length
         let hs_len = hello_body.len() as u32;
         let mut hs = vec![
             0x01,
@@ -391,8 +371,6 @@ mod tests {
             hs_len as u8,
         ];
         hs.extend_from_slice(&hello_body);
-
-        // TLS record: Handshake(0x16) + version(0x0301) + length
         let mut record = Vec::new();
         record.push(0x16);
         record.extend_from_slice(&[0x03, 0x01]);
@@ -433,14 +411,12 @@ mod tests {
 
     #[test]
     fn test_grease_filtered_from_ja3() {
-        // 0x0A0A and 0xFAFA are GREASE values
         let ciphers = &[0x0A0Au16, 0xC02B, 0xFAFA, 0xC02F];
         let buf = build_clienthello_bytes(0x0303, ciphers, &[]);
 
         let info = parse_clienthello(&buf).unwrap();
         let ja3 = TlsFingerprint::compute(&info);
 
-        // GREASE values must not appear in the JA3 string
         assert!(!ja3.ja3_string.contains("2570")); // 0x0A0A = 2570
         assert!(!ja3.ja3_string.contains("64250")); // 0xFAFA = 64250
         assert!(ja3.ja3_string.contains("49195")); // 0xC02B
@@ -458,13 +434,12 @@ mod tests {
         let info = parse_clienthello(&buf).unwrap();
         let fp = TlsFingerprint::compute(&info);
 
-        // Format: VERSION,CIPHERS,EXTENSIONS,GROUPS,FORMATS
         let parts: Vec<&str> = fp.ja3_string.split(',').collect();
         assert_eq!(parts.len(), 5);
-        assert_eq!(parts[0], "771"); // TLS 1.2 = 0x0303 = 771
+        assert_eq!(parts[0], "771");
         assert_eq!(parts[1], "49195-49199");
-        assert_eq!(parts[2], "10-11"); // extension types 0x000A and 0x000B
-        assert_eq!(parts[3], "29"); // 0x001D = 29
+        assert_eq!(parts[2], "10-11");
+        assert_eq!(parts[3], "29");
         assert_eq!(parts[4], "0");
     }
 
@@ -493,9 +468,7 @@ mod tests {
         let info = parse_clienthello(&buf).unwrap();
         let fp = TlsFingerprint::compute(&info);
 
-        // JA4 starts with "t12_" (TLS 1.2, 2 ciphers)
         assert!(fp.ja4.starts_with("t12_"), "got: {}", fp.ja4);
-        // ALPN field should be "h2"
         let parts: Vec<&str> = fp.ja4.split('_').collect();
         assert_eq!(parts.len(), 6);
         assert_eq!(parts[3], "h2");
