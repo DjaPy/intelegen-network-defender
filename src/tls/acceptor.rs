@@ -1,22 +1,15 @@
-//! TLS acceptor builder from PEM certificate and key files
-
-use std::io::BufReader;
 use std::sync::Arc;
 
 use rustls::ServerConfig;
+use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio_rustls::TlsAcceptor;
 
 use crate::error::{ArmorError, Result};
 
-/// Build a TLS acceptor from PEM certificate and private key files.
 pub fn build_acceptor(cert_path: &str, key_path: &str) -> Result<TlsAcceptor> {
-    let cert_file = std::fs::File::open(cert_path).map_err(|e| {
-        ArmorError::Config(format!("Failed to open TLS cert '{}': {}", cert_path, e))
-    })?;
-    let mut cert_reader = BufReader::new(cert_file);
-
-    let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut cert_reader)
+    let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_file_iter(cert_path)
+        .map_err(|e| ArmorError::Config(format!("Failed to open TLS cert '{}': {}", cert_path, e)))?
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|e| ArmorError::Config(format!("Failed to parse TLS cert: {}", e)))?;
 
@@ -27,13 +20,8 @@ pub fn build_acceptor(cert_path: &str, key_path: &str) -> Result<TlsAcceptor> {
         )));
     }
 
-    let key_file = std::fs::File::open(key_path)
+    let key = PrivateKeyDer::from_pem_file(key_path)
         .map_err(|e| ArmorError::Config(format!("Failed to open TLS key '{}': {}", key_path, e)))?;
-    let mut key_reader = BufReader::new(key_file);
-
-    let key: PrivateKeyDer<'static> = rustls_pemfile::private_key(&mut key_reader)
-        .map_err(|e| ArmorError::Config(format!("Failed to parse TLS key: {}", e)))?
-        .ok_or_else(|| ArmorError::Config(format!("No private key found in '{}'", key_path)))?;
 
     let config = ServerConfig::builder()
         .with_no_client_auth()

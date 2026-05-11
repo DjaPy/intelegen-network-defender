@@ -7,7 +7,7 @@ rust-version = "1.93"
 [features]
 default = []
 redis-storage = ["redis"]
-tls = ["rustls", "tokio-rustls", "rustls-pemfile", "md-5"]
+tls = ["rustls", "tokio-rustls", "md-5"]
 
 [dependencies]
 # Async runtime
@@ -41,7 +41,6 @@ lazy_static = "1.4"
 # TLS fingerprinting (feature: tls)
 rustls = { version = "0.23", optional = true }
 tokio-rustls = { version = "0.26", optional = true }
-rustls-pemfile = { version = "2", optional = true }
 md-5 = { version = "0.10", optional = true }
 
 [dev-dependencies]
@@ -49,3 +48,13 @@ temp-env = "0.3"
 futures = "0.3"
 rcgen = "0.13"
 tempfile = "3"
+criterion = { version = "0.5", features = ["async_tokio"] }
+
+[[bench]]
+name = "rate_limiter"
+harness = false
+
+[[bench]]
+name = "tls_fingerprint"
+harness = false
+required-features = ["tls"]

@@ -4,26 +4,59 @@ services:
     container_name: intellegen-defender
     ports:
       - "8080:8080"
+      - "127.0.0.1:9090:9090"
     environment:
       - SERVER_HOST=0.0.0.0
       - SERVER_PORT=8080
+
       - PROXY_UPSTREAM_URL=http://backend:3000
+      - PROXY_TIMEOUT_SECS=30
+      - PROXY_PRESERVE_HOST=false
+
+      - CIRCUIT_BREAKER_ENABLED=true
+      - CIRCUIT_BREAKER_FAILURE_THRESHOLD=5
+      - CIRCUIT_BREAKER_OPEN_TIMEOUT_SECS=60
+      - CIRCUIT_BREAKER_HALF_OPEN_MAX_REQUESTS=1
+
       - FINGERPRINT_ENABLED=true
       - FINGERPRINT_DENY_THRESHOLD=85
       - FINGERPRINT_CHALLENGE_THRESHOLD=70
+      - FINGERPRINT_USER_AGENT_WHITELIST=googlebot,bingbot
+      - FINGERPRINT_USER_AGENT_BLACKLIST=
+      - FINGERPRINT_STRICT_HEADER_ORDER=false
+      - FINGERPRINT_REQUIRE_COMMON_HEADERS=true
+
       - RATE_LIMIT_ENABLED=true
       - RATE_LIMIT_REQUESTS_PER_SECOND=100
       - RATE_LIMIT_BURST_CAPACITY=10
       - RATE_LIMIT_STORAGE=redis
+
+      - SLOWLORIS_ENABLED=true
+      - SLOWLORIS_HEADER_TIMEOUT_SECS=10
+      - SLOWLORIS_REQUEST_TIMEOUT_SECS=60
+      - SLOWLORIS_MAX_CONNECTIONS_PER_IP=10
+      - SLOWLORIS_CONNECTION_RATE_PER_SEC=5
+      - SLOWLORIS_IDLE_TIMEOUT_SECS=30
+      - SLOWLORIS_STORAGE=redis
+
       - CHALLENGE_ENABLED=true
       - CHALLENGE_DIFFICULTY=20
+      - CHALLENGE_TIMEOUT_SECS=300
+      - CHALLENGE_SESSION_DURATION_SECS=3600
       - CHALLENGE_STORAGE=redis
-      - SLOWLORIS_STORAGE=redis
+
       - REDIS_URL=redis://redis:6379
+
+      - METRICS_ENABLED=true
+      - METRICS_HOST=0.0.0.0
+      - METRICS_PORT=9090
+
       - RUST_LOG=info
     depends_on:
-      - redis
-      - backend
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_started
     networks:
       - defender-net
     restart: unless-stopped
